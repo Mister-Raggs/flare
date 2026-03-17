@@ -1,0 +1,23 @@
+# Core
+drain3>=0.9.11
+scikit-learn>=1.3.0
+numpy>=1.24.0
+rich>=13.0.0
+click>=8.1.0
+pydantic>=2.0.0
+
+# LLM
+anthropic>=0.40.0
+
+# API
+fastapi>=0.110.0
+uvicorn[standard]>=0.27.0
+httpx>=0.27.0
+python-multipart>=0.0.9
+
+# Dev
+pytest>=7.4.0
+pytest-cov>=4.1.0
+pytest-asyncio>=0.23.0
+ruff>=0.3.0
+mypy>=1.8.0
