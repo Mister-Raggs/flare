@@ -7,6 +7,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass
+from typing import Any
 
 import anthropic
 
@@ -118,7 +119,8 @@ class AnthropicClient:
 
                 latency_ms = (time.monotonic() - start_time) * 1000
 
-                raw_text = response.content[0].text
+                first_block = response.content[0]
+                raw_text = first_block.text if hasattr(first_block, "text") else str(first_block)
                 input_tokens = response.usage.input_tokens
                 output_tokens = response.usage.output_tokens
 
@@ -171,7 +173,8 @@ class AnthropicClient:
             # Remove first line (```json) and last line (```)
             lines = [line for line in lines[1:] if line.strip() != "```"]
             cleaned = "\n".join(lines)
-        return json.loads(cleaned)
+        result: dict[Any, Any] = json.loads(cleaned)
+        return result
 
     def _estimate_cost(self, input_tokens: int, output_tokens: int) -> float:
         """Estimate USD cost based on token counts."""

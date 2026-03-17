@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 import click
 from rich.console import Console
@@ -221,7 +222,7 @@ def summarize(
 
     # Write output
     if output_path:
-        output = {
+        output: dict[str, Any] = {
             "summarized_incidents": [s.model_dump() for s in summarized],
         }
         if eval_result:

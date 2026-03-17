@@ -34,7 +34,9 @@ def _to_incident(payload: IncidentPayload):  # type: ignore[no-untyped-def]
         anomaly_scores=[payload.mean_anomaly_score],
         log_lines=payload.log_lines,
         templates=payload.templates,
-        time_range=tuple(payload.time_range) if len(payload.time_range) == 2 else ("", ""),
+        time_range=(payload.time_range[0], payload.time_range[1])
+        if len(payload.time_range) == 2
+        else ("", ""),
     )
 
 

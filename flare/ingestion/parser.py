@@ -149,7 +149,7 @@ class LogParser:
         """Get the Drain3 template for a log message."""
         matched_cluster = self._miner.match(content)
         if matched_cluster:
-            return matched_cluster.get_template()
+            return str(matched_cluster.get_template())
         return content
 
     def _extract_params(self, content: str, template: str) -> list[str]:
