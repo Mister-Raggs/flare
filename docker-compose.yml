@@ -1,0 +1,21 @@
+services:
+  flare:
+    build: .
+    ports:
+      - "${FLARE_PORT:-8000}:8000"
+    env_file:
+      - .env
+    environment:
+      - FLARE_HOST=0.0.0.0
+      - FLARE_PORT=8000
+      - FLARE_LOG_LEVEL=${FLARE_LOG_LEVEL:-INFO}
+      - FLARE_CORS_ORIGINS=*
+    volumes:
+      - ./logs:/app/logs
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
