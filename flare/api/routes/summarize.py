@@ -107,6 +107,18 @@ def _run_summarization(
     total_tokens = sum(u.input_tokens + u.output_tokens for u in all_usage)
     total_cost = sum(u.estimated_cost_usd for u in all_usage)
 
+    # Record LLM metrics
+    from flare.api.metrics import get_metrics
+
+    m = get_metrics()
+    m.inc("flare_llm_requests_total", value=len(summarized))
+    m.inc("flare_llm_tokens_total", value=total_tokens, type="all")
+    for u in all_usage:
+        m.inc("flare_llm_tokens_total", value=u.input_tokens, type="input")
+        m.inc("flare_llm_tokens_total", value=u.output_tokens, type="output")
+        m.observe("flare_llm_latency_seconds", u.latency_ms / 1000.0)
+    m.inc("flare_llm_cost_usd_total", value=total_cost)
+
     return SummarizeResponse(
         summaries=summaries,
         eval_results=eval_results,

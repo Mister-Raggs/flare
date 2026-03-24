@@ -60,6 +60,17 @@ def _run_detection(log_text: str, contamination: float) -> DetectResponse:
 
     elapsed_ms = int((time.monotonic() - start) * 1000)
 
+    # Record detection metrics
+    from flare.api.metrics import get_metrics
+
+    m = get_metrics()
+    m.inc("flare_detection_runs_total")
+    m.observe("flare_detection_duration_seconds", (time.monotonic() - start))
+    m.inc("flare_anomalies_detected_total", value=len(anomalies))
+    m.inc("flare_incidents_clustered_total", value=len(incidents))
+    m.set_gauge("flare_last_detection_blocks", float(len(results)))
+    m.set_gauge("flare_last_detection_anomalies", float(len(anomalies)))
+
     incident_payloads = []
     for inc in incidents:
         incident_payloads.append(

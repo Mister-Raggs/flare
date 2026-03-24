@@ -81,6 +81,123 @@
     color: var(--text-secondary);
   }
 
+  header .tab-group {
+    display: flex;
+    gap: 2px;
+    margin-left: 24px;
+  }
+
+  header .tab-btn {
+    padding: 6px 14px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--radius);
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+
+  header .tab-btn:hover { color: var(--text-primary); background: var(--bg-tertiary); }
+  header .tab-btn.active { color: var(--accent); background: var(--bg-tertiary); border-color: var(--border); }
+
+  /* ── Metrics Panel ──────────────────────────────────── */
+  .metrics-view {
+    flex: 1;
+    overflow-y: auto;
+    padding: 24px;
+    display: none;
+  }
+
+  .metrics-view.visible { display: block; }
+
+  .metrics-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 16px;
+    margin-bottom: 24px;
+  }
+
+  .metric-card {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+  }
+
+  .metric-card h4 {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 8px;
+  }
+
+  .metric-big {
+    font-size: 32px;
+    font-weight: 700;
+    color: var(--text-primary);
+    font-family: var(--mono);
+  }
+
+  .metric-sub {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 4px;
+  }
+
+  .metric-bar-group { margin-top: 12px; }
+
+  .metric-bar-label {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-bottom: 4px;
+  }
+
+  .metric-bar-track {
+    height: 6px;
+    background: var(--bg-tertiary);
+    border-radius: 3px;
+    overflow: hidden;
+    margin-bottom: 8px;
+  }
+
+  .metric-bar-fill {
+    height: 100%;
+    border-radius: 3px;
+    transition: width 0.3s ease;
+  }
+
+  .metrics-raw {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+  }
+
+  .metrics-raw h4 {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 12px;
+  }
+
+  .metrics-raw pre {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-primary);
+    white-space: pre-wrap;
+    word-break: break-all;
+    max-height: 400px;
+    overflow-y: auto;
+  }
+
   /* ── Input Area ────────────────────────────────────── */
   .input-area {
     background: var(--bg-secondary);
@@ -444,6 +561,10 @@
 <header>
   <h1><span>Flare</span></h1>
   <span class="version" id="version">v--</span>
+  <div class="tab-group">
+    <button class="tab-btn active" onclick="switchTab('analyze')">Analyze</button>
+    <button class="tab-btn" onclick="switchTab('metrics')">Metrics</button>
+  </div>
   <div style="flex:1"></div>
   <div class="health-dot" id="healthDot"></div>
   <span class="health-label" id="healthLabel">checking...</span>
@@ -480,6 +601,15 @@
       Select an incident to view details
     </div>
     <div id="detailContent" style="display:none"></div>
+  </div>
+</div>
+
+<!-- Metrics View (hidden by default) -->
+<div class="metrics-view" id="metricsView">
+  <div class="metrics-grid" id="metricsGrid"></div>
+  <div class="metrics-raw">
+    <h4>Raw Prometheus Metrics</h4>
+    <pre id="metricsRaw">Loading metrics...</pre>
   </div>
 </div>
 
@@ -809,6 +939,152 @@ function escapeHtml(text) {
   const div = document.createElement('div');
   div.textContent = text;
   return div.innerHTML;
+}
+
+// ── Tab Switching ────────────────────────────────────────────
+function switchTab(tab) {
+  const tabs = document.querySelectorAll('.tab-btn');
+  tabs.forEach(t => t.classList.toggle('active', t.textContent.toLowerCase() === tab));
+
+  const analyzeEls = [
+    document.querySelector('.input-area'),
+    document.querySelector('.main'),
+    document.getElementById('statsBar'),
+  ];
+  const metricsEl = document.getElementById('metricsView');
+
+  if (tab === 'metrics') {
+    analyzeEls.forEach(el => el.style.display = 'none');
+    metricsEl.classList.add('visible');
+    fetchMetrics();
+  } else {
+    analyzeEls.forEach(el => el.style.display = '');
+    metricsEl.classList.remove('visible');
+  }
+}
+
+// ── Metrics Fetching & Rendering ─────────────────────────────
+async function fetchMetrics() {
+  try {
+    const resp = await fetch(API_BASE + '/metrics');
+    const raw = await resp.text();
+    document.getElementById('metricsRaw').textContent = raw;
+    renderMetricCards(raw);
+  } catch {
+    document.getElementById('metricsRaw').textContent = 'Failed to fetch metrics';
+  }
+}
+
+function parsePrometheusMetrics(raw) {
+  const metrics = {};
+  const lines = raw.split('\n');
+  for (const line of lines) {
+    if (!line || line.startsWith('#')) continue;
+    const match = line.match(/^([a-zA-Z_]+)(?:\{([^}]*)\})?\s+([\d.eE+-]+)$/);
+    if (match) {
+      const [, name, labels, value] = match;
+      if (!metrics[name]) metrics[name] = [];
+      metrics[name].push({ labels: labels || '', value: parseFloat(value) });
+    }
+  }
+  return metrics;
+}
+
+function renderMetricCards(raw) {
+  const m = parsePrometheusMetrics(raw);
+  const grid = document.getElementById('metricsGrid');
+  const cards = [];
+
+  // Uptime
+  if (m['flare_uptime_seconds']) {
+    const secs = m['flare_uptime_seconds'][0].value;
+    const mins = Math.floor(secs / 60);
+    const hrs = Math.floor(mins / 60);
+    const display = hrs > 0 ? hrs + 'h ' + (mins % 60) + 'm' : mins + 'm ' + Math.floor(secs % 60) + 's';
+    cards.push(metricCard('Uptime', display, Math.floor(secs) + ' seconds'));
+  }
+
+  // Total requests
+  if (m['flare_http_requests_total']) {
+    const total = m['flare_http_requests_total'].reduce((s, e) => s + e.value, 0);
+    const byStatus = {};
+    m['flare_http_requests_total'].forEach(e => {
+      const st = (e.labels.match(/status="(\d+)"/) || [])[1] || '???';
+      byStatus[st] = (byStatus[st] || 0) + e.value;
+    });
+    let sub = Object.entries(byStatus).map(([k, v]) => k + ': ' + v).join(' / ');
+    cards.push(metricCard('HTTP Requests', total.toLocaleString(), sub));
+  }
+
+  // Detection runs
+  if (m['flare_detection_runs_total']) {
+    const runs = m['flare_detection_runs_total'][0].value;
+    const anomalies = m['flare_anomalies_detected_total'] ? m['flare_anomalies_detected_total'][0].value : 0;
+    const incidents = m['flare_incidents_clustered_total'] ? m['flare_incidents_clustered_total'][0].value : 0;
+    cards.push(metricCard('Detection Runs', runs.toLocaleString(), anomalies + ' anomalies / ' + incidents + ' incidents'));
+  }
+
+  // LLM usage
+  if (m['flare_llm_requests_total']) {
+    const reqs = m['flare_llm_requests_total'][0].value;
+    const cost = m['flare_llm_cost_usd_total'] ? m['flare_llm_cost_usd_total'][0].value : 0;
+    const tokenEntries = m['flare_llm_tokens_total'] || [];
+    let inputTk = 0, outputTk = 0;
+    tokenEntries.forEach(e => {
+      if (e.labels.includes('type="input"')) inputTk = e.value;
+      if (e.labels.includes('type="output"')) outputTk = e.value;
+    });
+    cards.push(metricCard('LLM Calls', reqs.toLocaleString(), '$' + cost.toFixed(4) + ' total cost'));
+    cards.push(metricCard('LLM Tokens', (inputTk + outputTk).toLocaleString(), inputTk.toLocaleString() + ' in / ' + outputTk.toLocaleString() + ' out'));
+  }
+
+  // Request latency
+  if (m['flare_http_request_duration_seconds_count']) {
+    const count = m['flare_http_request_duration_seconds_count'][0].value;
+    const sum = m['flare_http_request_duration_seconds_sum'] ? m['flare_http_request_duration_seconds_sum'][0].value : 0;
+    const avg = count > 0 ? (sum / count * 1000).toFixed(0) : '0';
+    cards.push(metricCard('Avg Latency', avg + 'ms', count + ' requests sampled'));
+  }
+
+  // LLM latency
+  if (m['flare_llm_latency_seconds_count']) {
+    const count = m['flare_llm_latency_seconds_count'][0].value;
+    const sum = m['flare_llm_latency_seconds_sum'] ? m['flare_llm_latency_seconds_sum'][0].value : 0;
+    const avg = count > 0 ? (sum / count * 1000).toFixed(0) : '0';
+    cards.push(metricCard('Avg LLM Latency', avg + 'ms', count + ' calls'));
+  }
+
+  // Last detection stats (gauges)
+  if (m['flare_last_detection_blocks']) {
+    const blocks = m['flare_last_detection_blocks'][0].value;
+    const anomalies = m['flare_last_detection_anomalies'] ? m['flare_last_detection_anomalies'][0].value : 0;
+    const rate = blocks > 0 ? (anomalies / blocks * 100).toFixed(1) : '0';
+    cards.push(metricCardWithBar('Last Detection', rate + '% anomaly rate', anomalies + ' of ' + blocks + ' blocks', parseFloat(rate)));
+  }
+
+  grid.innerHTML = cards.join('');
+}
+
+function metricCard(title, value, sub) {
+  return `<div class="metric-card">
+    <h4>${title}</h4>
+    <div class="metric-big">${value}</div>
+    <div class="metric-sub">${sub}</div>
+  </div>`;
+}
+
+function metricCardWithBar(title, value, sub, pct) {
+  const color = pct > 20 ? 'var(--red)' : pct > 10 ? 'var(--orange)' : pct > 5 ? 'var(--yellow)' : 'var(--green)';
+  return `<div class="metric-card">
+    <h4>${title}</h4>
+    <div class="metric-big">${value}</div>
+    <div class="metric-sub">${sub}</div>
+    <div class="metric-bar-group">
+      <div class="metric-bar-track">
+        <div class="metric-bar-fill" style="width:${Math.min(pct, 100)}%;background:${color}"></div>
+      </div>
+    </div>
+  </div>`;
 }
 
 // ── Init ────────────────────────────────────────────────────
