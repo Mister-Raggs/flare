@@ -6,6 +6,7 @@ import re
 from pathlib import Path
 
 from drain3 import TemplateMiner
+from drain3.file_persistence import FilePersistence
 from drain3.template_miner_config import TemplateMinerConfig
 
 from flare.ingestion.formats import (
@@ -27,14 +28,22 @@ def _parse_level(raw: str) -> LogLevel:
 
 
 def _create_template_miner(
-    sim_th: float = 0.4, depth: int = 4
+    sim_th: float = 0.4,
+    depth: int = 4,
+    persist_path: str | None = None,
 ) -> TemplateMiner:
-    """Create a configured Drain3 TemplateMiner instance."""
+    """Create a configured Drain3 TemplateMiner instance.
+
+    If persist_path is given, templates are loaded from and saved to that
+    file automatically by Drain3's FilePersistence handler.
+    """
     config = TemplateMinerConfig()
     config.drain_sim_th = sim_th
     config.drain_depth = depth
     config.profiling_enabled = False
-    return TemplateMiner(config=config)
+
+    persistence = FilePersistence(persist_path) if persist_path else None
+    return TemplateMiner(persistence_handler=persistence, config=config)
 
 
 class LogParser:
@@ -53,17 +62,25 @@ class LogParser:
         >>> print(f"Parsed {batch.total_lines} lines, {batch.template_count} templates")
     """
 
-    def __init__(self, log_format: str = "auto") -> None:
+    def __init__(
+        self,
+        log_format: str = "auto",
+        persist_path: str | None = None,
+    ) -> None:
         """Initialize the parser.
 
         Args:
             log_format: Format name from the registry, "auto" for
                 auto-detection, or "generic" for heuristic parsing.
+            persist_path: Optional file path for Drain3 template persistence.
+                When set, templates are loaded on startup and saved after each
+                call to ``add_log_message``, so state survives restarts.
 
         Raises:
             ValueError: If a named format is not found in the registry.
         """
         self.log_format = log_format
+        self._persist_path = persist_path
         self._format: LogFormat | None = None
         self._entity_pattern: re.Pattern[str] | None = None
 
@@ -78,7 +95,7 @@ class LogParser:
 
         sim_th = self._format.drain_sim_th if self._format else 0.4
         depth = self._format.drain_depth if self._format else 4
-        self._miner = _create_template_miner(sim_th, depth)
+        self._miner = _create_template_miner(sim_th, depth, persist_path)
 
     def parse_file(self, filepath: str | Path) -> ParsedLogBatch:
         """Parse an entire log file into structured events.
@@ -254,9 +271,9 @@ class LogParser:
         if detected:
             self._format = detected
             self._entity_pattern = detected.entity_pattern
-            # Re-init miner with format-specific Drain3 config
+            # Re-init miner with format-specific Drain3 config + persistence
             self._miner = _create_template_miner(
-                detected.drain_sim_th, detected.drain_depth
+                detected.drain_sim_th, detected.drain_depth, self._persist_path
             )
         else:
             # Generic fallback — try to find an entity ID pattern
@@ -281,11 +298,21 @@ class LogParser:
 
         return params
 
-    def reset(self) -> None:
-        """Reset the template miner state and format detection."""
+    def reset(self, clear_persistence: bool = False) -> None:
+        """Reset the template miner state and format detection.
+
+        Args:
+            clear_persistence: If True and a persist_path was configured,
+                delete the snapshot file so the next run starts from scratch.
+        """
+        if clear_persistence and self._persist_path:
+            snap = Path(self._persist_path)
+            if snap.exists():
+                snap.unlink()
+
         sim_th = self._format.drain_sim_th if self._format else 0.4
         depth = self._format.drain_depth if self._format else 4
-        self._miner = _create_template_miner(sim_th, depth)
+        self._miner = _create_template_miner(sim_th, depth, self._persist_path)
         if self.log_format == "auto":
             self._format = None
             self._entity_pattern = None

@@ -378,3 +378,58 @@ class TestAutoMode:
         assert parser._format is not None
         parser.reset()
         assert parser._format is None
+
+
+# ---------------------------------------------------------------------------
+# Persistence tests
+# ---------------------------------------------------------------------------
+
+
+class TestPersistence:
+    LINE = (
+        "081109 203518 148 INFO dfs.DataNode$DataXceiver: "
+        "Receiving block blk_123 src: /a dest: /b"
+    )
+
+    def test_snapshot_file_created(self, tmp_path) -> None:
+        snap = str(tmp_path / "drain.bin")
+        parser = LogParser("hdfs", persist_path=snap)
+        parser.parse_line(self.LINE, line_id=1)
+        assert Path(snap).exists()
+
+    def test_templates_survive_restart(self, tmp_path) -> None:
+        snap = str(tmp_path / "drain.bin")
+
+        # First parser: learns the template
+        p1 = LogParser("hdfs", persist_path=snap)
+        p1.parse_line(self.LINE, line_id=1)
+        templates_after_first = len(p1._miner.drain.clusters)
+        assert templates_after_first > 0
+
+        # Second parser: loads snapshot, should already know the template
+        p2 = LogParser("hdfs", persist_path=snap)
+        assert len(p2._miner.drain.clusters) == templates_after_first
+
+    def test_reset_without_clear_keeps_snapshot(self, tmp_path) -> None:
+        snap = str(tmp_path / "drain.bin")
+        parser = LogParser("hdfs", persist_path=snap)
+        parser.parse_line(self.LINE, line_id=1)
+        assert Path(snap).exists()
+
+        parser.reset(clear_persistence=False)
+        assert Path(snap).exists()
+
+    def test_reset_with_clear_deletes_snapshot(self, tmp_path) -> None:
+        snap = str(tmp_path / "drain.bin")
+        parser = LogParser("hdfs", persist_path=snap)
+        parser.parse_line(self.LINE, line_id=1)
+        assert Path(snap).exists()
+
+        parser.reset(clear_persistence=True)
+        assert not Path(snap).exists()
+
+    def test_no_persist_path_leaves_no_file(self, tmp_path) -> None:
+        parser = LogParser("hdfs")
+        parser.parse_line(self.LINE, line_id=1)
+        # No snapshot anywhere in tmp_path
+        assert list(tmp_path.iterdir()) == []
