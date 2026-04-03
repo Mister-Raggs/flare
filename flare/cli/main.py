@@ -354,5 +354,122 @@ def _display_llm_eval(eval_result: object) -> None:
     console.print(table)
 
 
+@cli.command()
+@click.option(
+    "--replay", "-r",
+    "replay_path",
+    required=True,
+    type=click.Path(exists=True),
+    help="Path to log file to replay.",
+)
+@click.option(
+    "--rate",
+    default=10.0,
+    type=float,
+    help="Lines to emit per second (0 = as fast as possible).",
+    show_default=True,
+)
+@click.option(
+    "--window",
+    default=50,
+    type=int,
+    help="Number of lines per detection window.",
+    show_default=True,
+)
+@click.option(
+    "--format", "log_format",
+    default="auto",
+    type=str,
+    help="Log format: auto, hdfs, openssh, syslog, generic.",
+    show_default=True,
+)
+@click.option(
+    "--contamination",
+    default=0.03,
+    type=float,
+    help="Expected anomaly fraction (0.0–0.5).",
+    show_default=True,
+)
+@click.option(
+    "--persist",
+    "persist_path",
+    default=None,
+    type=click.Path(),
+    help="File path for Drain3 template persistence across restarts.",
+)
+def collect(
+    replay_path: str,
+    rate: float,
+    window: int,
+    log_format: str,
+    contamination: float,
+    persist_path: str | None,
+) -> None:
+    """Replay a log file through the detection pipeline in real time."""
+    from flare.replay import LogReplayer
+
+    effective_rate: float | None = rate if rate > 0 else None
+
+    console.print(
+        Panel(
+            f"[bold cyan]Replaying[/] [blue]{replay_path}[/]\n"
+            f"rate=[green]{rate or 'max'}[/] lines/s  "
+            f"window=[green]{window}[/] lines  "
+            f"format=[green]{log_format}[/]",
+            title="flare collect",
+            expand=False,
+        )
+    )
+
+    try:
+        replayer = LogReplayer(
+            filepath=replay_path,
+            rate=effective_rate,
+            window=window,
+            log_format=log_format,
+            contamination=contamination,
+            persist_path=persist_path,
+        )
+    except FileNotFoundError as e:
+        console.print(f"[red]{e}[/]")
+        sys.exit(1)
+
+    total_anomalies = 0
+    total_incidents = 0
+
+    for result in replayer.replay():
+        if result.incidents:
+            total_anomalies += result.anomaly_count
+            total_incidents += result.incident_count
+            for inc in result.incidents:
+                sev = inc.severity
+                color = "red" if sev > 0.5 else "yellow" if sev > 0.2 else "green"
+                console.print(
+                    f"  [dim]w{result.window_index:03d}[/] "
+                    f"[{color}]INCIDENT {inc.incident_id}[/{color}]  "
+                    f"blocks={len(inc.block_ids)}  "
+                    f"severity={sev:.3f}  "
+                    f"[dim]{result.elapsed_ms:.0f}ms[/]"
+                )
+        else:
+            console.print(
+                f"  [dim]w{result.window_index:03d}  "
+                f"{result.lines_processed} lines  "
+                f"{len(result.events)} events  "
+                f"no anomalies  "
+                f"{result.elapsed_ms:.0f}ms[/]"
+            )
+
+    console.print()
+    console.print(
+        Panel(
+            f"Total anomalous blocks: [red]{total_anomalies}[/]\n"
+            f"Total incidents: [magenta]{total_incidents}[/]",
+            title="Replay complete",
+            expand=False,
+        )
+    )
+
+
 if __name__ == "__main__":
     cli()

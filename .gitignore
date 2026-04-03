@@ -36,6 +36,9 @@ results.json
 .pytest_cache/
 .ruff_cache/
 
+# Drain3 template persistence snapshots
+*.bin
+
 # OS
 .DS_Store
 Thumbs.db

@@ -41,6 +41,9 @@ def _create_template_miner(
     config.drain_sim_th = sim_th
     config.drain_depth = depth
     config.profiling_enabled = False
+    if persist_path:
+        # Save on every template change, not just every 5 minutes
+        config.snapshot_interval_minutes = 0
 
     persistence = FilePersistence(persist_path) if persist_path else None
     return TemplateMiner(persistence_handler=persistence, config=config)
@@ -164,7 +167,7 @@ class LogParser:
                     self._format = fmt
                     self._entity_pattern = fmt.entity_pattern
                     self._miner = _create_template_miner(
-                        fmt.drain_sim_th, fmt.drain_depth
+                        fmt.drain_sim_th, fmt.drain_depth, self._persist_path
                     )
                     return self._parse_with_format(raw_line, line_id)
 
