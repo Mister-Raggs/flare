@@ -10,8 +10,11 @@ from dataclasses import dataclass
 from typing import Any
 
 import anthropic
+from dotenv import load_dotenv
 
 from flare.llm.schemas import UsageStats
+
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
