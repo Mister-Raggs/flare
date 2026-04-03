@@ -87,7 +87,7 @@ class TestReplay:
 
     def test_all_lines_covered(self) -> None:
         total_lines = len(
-            [l for l in SAMPLE_LOG.read_text().splitlines() if l.strip()]
+            [line for line in SAMPLE_LOG.read_text().splitlines() if line.strip()]
         )
         r = LogReplayer(SAMPLE_LOG, rate=0, window=20)
         results = list(r.replay())

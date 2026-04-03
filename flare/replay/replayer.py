@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterator
 
 from flare.clustering.clusterer import Incident, IncidentClusterer
 from flare.detection.detector import AnomalyDetector, AnomalyResult
@@ -104,7 +104,7 @@ class LogReplayer:
             WindowResult for each window of ``self.window`` lines.
         """
         lines = self.filepath.read_text(encoding="utf-8", errors="replace").splitlines()
-        lines = [l for l in lines if l.strip()]
+        lines = [line for line in lines if line.strip()]
 
         sleep_per_line = (1.0 / self.rate) if self.rate else 0.0
 
