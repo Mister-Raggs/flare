@@ -123,13 +123,26 @@ curl -X POST http://localhost:8000/analyze \
   -d '{"log_text": "<paste logs here>", "run_eval": false}'
 ```
 
-## Benchmark Results (HDFS Sample — 86 lines, 18 blocks, 3 anomalies)
+## Benchmark Results
 
-### Classical Detection
+### Classical Detection — HDFS Dataset (LogHub)
 
-| Method           | Precision | Recall | F1    | Notes                        |
-|------------------|-----------|--------|-------|------------------------------|
-| Isolation Forest | 1.0000    | 1.0000 | 1.000 | contamination=0.15           |
+Evaluated on the full public [HDFS log dataset](https://github.com/logpai/loghub) — 11.2M lines, 575,061 blocks, 16,838 anomalies (2.9% anomaly rate).
+
+| Method           | Precision | Recall | F1    | TP     | FP    | FN    | Notes                   |
+|------------------|-----------|--------|-------|--------|-------|-------|-------------------------|
+| Isolation Forest | 0.688     | 0.601  | 0.642 | 10,119 | 4,590 | 6,719 | contamination=0.029     |
+
+Features: per-block Drain3 template frequency vectors (47 templates learned across full dataset). Detection degrades on small slices (<50K blocks) due to insufficient template diversity — the model needs enough blocks to learn a meaningful normal distribution.
+
+<details>
+<summary>Micro-sample (86 lines, 18 blocks) — for unit test reference only</summary>
+
+| Method           | Precision | Recall | F1    | Notes                |
+|------------------|-----------|--------|-------|----------------------|
+| Isolation Forest | 1.0000    | 1.0000 | 1.000 | contamination=0.15   |
+
+</details>
 
 ### End-to-End Latency
 
