@@ -112,6 +112,112 @@
 
   .metrics-view.visible { display: block; }
 
+  .demo-view {
+    flex: 1;
+    overflow-y: auto;
+    padding: 24px;
+    display: none;
+  }
+  .demo-view.visible { display: flex; flex-direction: column; gap: 16px; }
+  .demo-header { display: flex; align-items: center; gap: 12px; }
+  .demo-header h3 { margin: 0; font-size: 16px; color: var(--text-primary); }
+  .demo-header p { margin: 0; font-size: 13px; color: var(--text-muted); }
+  .demo-feed {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-height: 200px;
+  }
+  .demo-window {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px 16px;
+    font-size: 13px;
+    animation: fadeIn 0.3s ease;
+  }
+  .demo-window.has-anomaly {
+    border-color: var(--red);
+    background: color-mix(in srgb, var(--red) 8%, var(--bg-secondary));
+  }
+  .demo-window .win-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 6px;
+  }
+  .demo-window .win-label { font-weight: 600; color: var(--text-secondary); }
+  .demo-window .win-anomaly { color: var(--red); font-weight: 600; }
+  .demo-window .win-ok { color: var(--green); }
+  .demo-window .win-meta { color: var(--text-muted); font-size: 12px; margin-left: auto; }
+  .demo-incident {
+    margin-top: 8px;
+    padding: 8px 12px;
+    background: var(--bg-tertiary);
+    border-radius: 4px;
+    border-left: 3px solid var(--red);
+  }
+  .demo-incident .inc-title { font-weight: 600; color: var(--text-primary); margin-bottom: 4px; }
+  .demo-incident .inc-blocks { color: var(--text-muted); font-size: 12px; }
+  .demo-done {
+    padding: 16px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--green);
+    border-radius: 6px;
+    color: var(--green);
+    font-weight: 600;
+    text-align: center;
+  }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+
+  .demo-explainer {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .pipeline-steps {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .pipeline-step {
+    flex: 1;
+    min-width: 200px;
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+  }
+  .step-num {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: var(--accent-dim, #1a3a5c);
+    color: var(--accent);
+    font-size: 12px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    margin-top: 2px;
+  }
+  .step-title { font-size: 13px; font-weight: 600; color: var(--text-primary); margin-bottom: 3px; }
+  .step-desc { font-size: 12px; color: var(--text-muted); line-height: 1.5; }
+  .step-desc code { color: var(--accent); background: var(--bg-tertiary); padding: 1px 4px; border-radius: 3px; font-size: 11px; }
+  .pipeline-arrow { color: var(--text-muted); font-size: 18px; padding-top: 4px; align-self: flex-start; margin-top: 12px; }
+  .demo-scale-note {
+    font-size: 12px;
+    color: var(--text-muted);
+    border-top: 1px solid var(--border);
+    padding-top: 10px;
+  }
+  .demo-scale-note strong { color: var(--text-secondary); }
+
   .metrics-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
@@ -564,6 +670,7 @@
   <div class="tab-group">
     <button class="tab-btn active" onclick="switchTab('analyze')">Analyze</button>
     <button class="tab-btn" onclick="switchTab('metrics')">Metrics</button>
+    <button class="tab-btn" onclick="switchTab('demo')">Live Demo</button>
   </div>
   <div style="flex:1"></div>
   <div class="health-dot" id="healthDot"></div>
@@ -610,6 +717,63 @@
   <div class="metrics-raw">
     <h4>Raw Prometheus Metrics</h4>
     <pre id="metricsRaw">Loading metrics...</pre>
+  </div>
+</div>
+
+<!-- Demo View -->
+<div class="demo-view" id="demoView">
+  <div class="demo-header">
+    <div>
+      <h3>Live Pipeline Demo</h3>
+      <p>Randomly samples blocks from the HDFS dataset and streams them through the full detection pipeline at 5 lines/sec. Each run is different.</p>
+    </div>
+    <div style="display:flex;align-items:center;gap:10px">
+      <label style="font-size:13px;color:var(--text-muted)">Lines:
+        <select id="demoLines" style="margin-left:6px;background:var(--bg-tertiary);color:var(--text-primary);border:1px solid var(--border);border-radius:4px;padding:3px 8px;font-size:13px">
+          <option value="50">50</option>
+          <option value="100" selected>100</option>
+          <option value="200">200</option>
+          <option value="500">500</option>
+        </select>
+      </label>
+      <button class="btn btn-primary" id="demoBtn" onclick="runDemo()">Run Demo</button>
+    </div>
+  </div>
+
+  <!-- Pipeline explainer -->
+  <div class="demo-explainer">
+    <div class="pipeline-steps">
+      <div class="pipeline-step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <div class="step-title">Drain3 Template Mining</div>
+          <div class="step-desc">Raw log lines are parsed and clustered into parameterized templates — e.g. <code>Receiving block &lt;*&gt; src: &lt;*&gt; dest: &lt;*&gt;</code>. This reduces millions of unique messages to a handful of structural patterns.</div>
+        </div>
+      </div>
+      <div class="pipeline-arrow">→</div>
+      <div class="pipeline-step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <div class="step-title">Isolation Forest Detection</div>
+          <div class="step-desc">Each block gets a feature vector: how often each template appeared. Isolation Forest flags blocks whose template distribution looks unusual — e.g. blocks with IOException/ERROR templates but no completion event.</div>
+        </div>
+      </div>
+      <div class="pipeline-arrow">→</div>
+      <div class="pipeline-step">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <div class="step-title">DBSCAN Clustering</div>
+          <div class="step-desc">Anomalous blocks are grouped into incidents by feature similarity. Each incident is enriched with raw log lines, templates, and time range — ready for LLM summarization.</div>
+        </div>
+      </div>
+    </div>
+    <div class="demo-scale-note">
+      Benchmarked on the full HDFS dataset: <strong>11.2M lines · 575K blocks · 16,838 anomalies</strong> → F1 = 0.642, Precision = 0.688, Recall = 0.601
+    </div>
+  </div>
+
+  <div class="demo-feed" id="demoFeed">
+    <div style="color:var(--text-muted);font-size:13px;">Click Run Demo to watch the pipeline process log windows in real time.</div>
   </div>
 </div>
 
@@ -903,7 +1067,7 @@ function toggleLogs(id) {
   }
 }
 
-// ── Update Stats Bar ────────────────────────────────────────
+// ── Update Stats Bar ───��────────────────────────────────────
 function updateStats() {
   if (!currentData) return;
 
@@ -952,18 +1116,128 @@ function switchTab(tab) {
     document.getElementById('statsBar'),
   ];
   const metricsEl = document.getElementById('metricsView');
+  const demoEl = document.getElementById('demoView');
+
+  analyzeEls.forEach(el => el.style.display = 'none');
+  metricsEl.classList.remove('visible');
+  demoEl.classList.remove('visible');
 
   if (tab === 'metrics') {
-    analyzeEls.forEach(el => el.style.display = 'none');
     metricsEl.classList.add('visible');
     fetchMetrics();
+  } else if (tab === 'demo') {
+    demoEl.classList.add('visible');
   } else {
     analyzeEls.forEach(el => el.style.display = '');
-    metricsEl.classList.remove('visible');
   }
 }
 
 // ── Metrics Fetching & Rendering ─────────────────────────────
+// ── Live Demo ────────────────────────────────────────────────
+let _demoSource = null;
+
+function runDemo() {
+  const feed = document.getElementById('demoFeed');
+  const btn = document.getElementById('demoBtn');
+
+  // Close any existing stream
+  if (_demoSource) { _demoSource.close(); _demoSource = null; }
+
+  feed.innerHTML = '';
+  btn.disabled = true;
+  btn.textContent = 'Running...';
+
+  const lines = document.getElementById('demoLines').value;
+  _demoSource = new EventSource(API_BASE + `/demo/stream?lines=${lines}`);
+
+  _demoSource.addEventListener('start', e => {
+    const d = JSON.parse(e.data);
+    const el = document.createElement('div');
+    el.style.cssText = 'color:var(--text-muted);font-size:13px;padding:4px 0';
+    el.textContent = `▶ ${d.message} — ${d.rate} lines/sec, window=${d.window} lines`;
+    feed.appendChild(el);
+  });
+
+  _demoSource.addEventListener('window', e => {
+    const d = JSON.parse(e.data);
+    const hasAnomaly = d.anomaly_count > 0;
+    const div = document.createElement('div');
+    div.className = 'demo-window' + (hasAnomaly ? ' has-anomaly' : '');
+
+    let html = `<div class="win-header">
+      <span class="win-label">Window ${d.window_index}</span>
+      <span>${d.lines_processed} lines · ${d.events_parsed} events · ${d.templates_seen ?? '?'} templates</span>
+      ${hasAnomaly
+        ? `<span class="win-anomaly">⚠ ${d.anomaly_count} anomal${d.anomaly_count > 1 ? 'ies' : 'y'}</span>`
+        : '<span class="win-ok">✓ normal</span>'}
+      <span class="win-meta">stream ~${Math.round(d.lines_processed / 5)}s · processing ${d.elapsed_ms}ms</span>
+    </div>`;
+
+    for (const inc of d.incidents) {
+      const sev = inc.severity >= 0.5 ? 'critical' : inc.severity >= 0.3 ? 'high' : inc.severity >= 0.15 ? 'medium' : 'low';
+
+      // Pick the most distinctive template — prefer error/exception over generic ones
+      const errorTemplate = inc.templates.find(t =>
+        /exception|ioexception|error|warn|failed|reset|timeout/i.test(t)
+      );
+      const displayTemplate = errorTemplate || inc.templates[0] || '';
+
+      // Infer reason from template content
+      const allTemplates = inc.templates.join(' ').toLowerCase();
+      const hasError = /ioexception|exception|error/.test(allTemplates);
+      const hasWarn = allTemplates.includes('warn');
+      const hasCompletion = /received block|terminating|success/.test(allTemplates);
+      let reason = '';
+      if (hasError && !hasCompletion) {
+        reason = 'Block has exception/error events with no successful completion — the transfer failed mid-operation. Template distribution is a statistical outlier vs. normally-completing blocks.';
+      } else if (hasError) {
+        reason = 'Block contains exception templates alongside a completion event — unusual pattern suggesting a recovered or partial failure.';
+      } else if (hasWarn) {
+        reason = 'Block shows WARN-level templates with atypical frequency relative to normal operations.';
+      } else if (!hasCompletion) {
+        reason = 'Block is missing expected completion templates (e.g. "Received block") — may indicate an incomplete or dropped transfer.';
+      } else {
+        reason = 'Template frequency vector is a statistical outlier vs. the distribution learned across all blocks in this window.';
+      }
+
+      html += `<div class="demo-incident">
+        <div class="inc-title">Incident ${inc.incident_id} — ${sev.toUpperCase()} <span style="font-weight:400;color:var(--text-muted)">(anomaly score ${inc.severity.toFixed(3)})</span></div>
+        <div class="inc-blocks" style="margin:4px 0">${inc.block_ids.length} block${inc.block_ids.length > 1 ? 's' : ''}: ${inc.block_ids.slice(0,2).join(', ')}${inc.block_ids.length > 2 ? ` +${inc.block_ids.length - 2} more` : ''}</div>
+        ${displayTemplate ? `<div class="inc-blocks" style="margin-bottom:6px;font-style:italic">"${displayTemplate}"</div>` : ''}
+        <div style="font-size:12px;color:var(--text-secondary);line-height:1.5">⟶ ${reason}</div>
+      </div>`;
+    }
+
+    div.innerHTML = html;
+    feed.appendChild(div);
+    div.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  });
+
+  _demoSource.addEventListener('done', e => {
+    const d = JSON.parse(e.data);
+    const el = document.createElement('div');
+    el.className = 'demo-done';
+    el.textContent = `✓ ${d.message} — ${d.total_events} events, ${d.total_anomalies} anomalies detected`;
+    feed.appendChild(el);
+    el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    _demoSource.close();
+    _demoSource = null;
+    btn.disabled = false;
+    btn.textContent = 'Run Demo';
+  });
+
+  _demoSource.addEventListener('error', () => {
+    const el = document.createElement('div');
+    el.style.cssText = 'color:var(--red);padding:8px 0;font-size:13px';
+    el.textContent = 'Demo stream error — is the API running?';
+    feed.appendChild(el);
+    _demoSource.close();
+    _demoSource = null;
+    btn.disabled = false;
+    btn.textContent = 'Run Demo';
+  });
+}
+
 async function fetchMetrics() {
   try {
     const resp = await fetch(API_BASE + '/metrics');

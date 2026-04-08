@@ -391,3 +391,51 @@ class TestDocs:
         """Swagger UI is accessible at /docs."""
         resp = client.get("/docs")
         assert resp.status_code == 200
+
+
+class TestDemo:
+    """Tests for the SSE demo endpoint."""
+
+    def test_demo_stream_returns_sse_content_type(self) -> None:
+        with client.stream("GET", "/demo/stream") as resp:
+            assert resp.status_code == 200
+            assert "text/event-stream" in resp.headers["content-type"]
+
+    def test_demo_stream_emits_start_and_done_events(self) -> None:
+        events = []
+        with client.stream("GET", "/demo/stream") as resp:
+            for line in resp.iter_lines():
+                if line.startswith("event:"):
+                    events.append(line.split(":", 1)[1].strip())
+        assert "start" in events
+        assert "done" in events
+
+    def test_demo_stream_emits_window_events(self) -> None:
+        events = []
+        with client.stream("GET", "/demo/stream") as resp:
+            for line in resp.iter_lines():
+                if line.startswith("event:"):
+                    events.append(line.split(":", 1)[1].strip())
+        assert "window" in events
+
+    def test_demo_stream_window_data_has_required_fields(self) -> None:
+        import json
+        window_data = None
+        with client.stream("GET", "/demo/stream") as resp:
+            current_event = None
+            for line in resp.iter_lines():
+                if line.startswith("event:"):
+                    current_event = line.split(":", 1)[1].strip()
+                elif line.startswith("data:") and current_event == "window":
+                    window_data = json.loads(line.split(":", 1)[1].strip())
+                    break
+        assert window_data is not None
+        assert "window_index" in window_data
+        assert "lines_processed" in window_data
+        assert "anomaly_count" in window_data
+        assert "incidents" in window_data
+
+    def test_demo_endpoint_in_openapi_schema(self) -> None:
+        resp = client.get("/openapi.json")
+        schema = resp.json()
+        assert "/demo/stream" in schema["paths"]

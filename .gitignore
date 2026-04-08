@@ -26,6 +26,7 @@ env/
 logs/*.log
 logs/*.csv
 !logs/hdfs_sample.log
+!logs/hdfs_demo.log
 !logs/sample_labels.csv
 HDFS_v1/
 

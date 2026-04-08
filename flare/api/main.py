@@ -31,6 +31,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
     )
     logger.info("Flare API v%s starting up", __version__)
+    logger.info(
+        "Dashboard: http://localhost:%s  |  Docs: http://localhost:%s/docs",
+        settings.port,
+        settings.port,
+    )
     yield
     logger.info("Flare API shutting down")
 
@@ -97,6 +102,7 @@ async def global_exception_handler(request: Request, exc: Exception) -> JSONResp
 
 
 # ── Register routes ────────────────────────────────────────────
+from flare.api.routes.demo import router as demo_router  # noqa: E402
 from flare.api.routes.detect import router as detect_router  # noqa: E402
 from flare.api.routes.health import router as health_router  # noqa: E402
 from flare.api.routes.metrics import router as metrics_router  # noqa: E402
@@ -106,6 +112,7 @@ app.include_router(health_router, tags=["Health"])
 app.include_router(metrics_router, tags=["Observability"])
 app.include_router(detect_router, tags=["Detection"])
 app.include_router(summarize_router, tags=["Summarization"])
+app.include_router(demo_router, tags=["Demo"])
 
 # ── Root redirect to dashboard ────────────────────────────────
 @app.get("/", include_in_schema=False)
