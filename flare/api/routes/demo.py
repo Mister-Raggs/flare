@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import tempfile
+from collections.abc import AsyncGenerator
 from pathlib import Path
 
 from fastapi import APIRouter, Query
@@ -28,7 +29,7 @@ def _sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
 
-async def _stream_demo(n_lines: int):
+async def _stream_demo(n_lines: int) -> AsyncGenerator[str, None]:
     """Generator that replays a shuffled log stream and yields SSE events."""
     from flare.replay import LogReplayer, shuffled_stream
 
@@ -107,7 +108,7 @@ async def demo_stream(
         le=_MAX_LINES,
         description="Number of log lines to sample (50–500).",
     ),
-):
+) -> StreamingResponse:
     """Stream a shuffled sample of HDFS logs through the detection pipeline.
 
     Each call shuffles blocks randomly so results vary between runs.
