@@ -18,6 +18,8 @@ docker-compose up
 
 Paste logs into the dashboard or hit the API directly at `http://localhost:8000/docs`.
 
+> **Live demo:** [`http://167.172.216.126:8000/docs`](http://167.172.216.126:8000/docs) — [`http://167.172.216.126:8000/dashboard`](http://167.172.216.126:8000/dashboard)
+
 > **Without Docker:** `pip install -e ".[all]"` then `uvicorn flare.api.main:app --reload`
 
 ## Why Flare?
