@@ -5,8 +5,6 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass, field
 
-import mlflow
-import mlflow.sklearn
 import numpy as np
 from sklearn.ensemble import IsolationForest
 
@@ -157,6 +155,10 @@ class AnomalyDetector:
         import json
         import tempfile
 
+        import mlflow
+        import mlflow.sklearn
+        import mlflow.tracking
+
         try:
             model = mlflow.sklearn.load_model("models:/flare-isolation-forest/Production")
         except Exception:
@@ -193,6 +195,9 @@ class AnomalyDetector:
         """Log params, metrics, and optionally register the model."""
         import json
         import tempfile
+
+        import mlflow
+        import mlflow.sklearn
 
         mlflow.set_experiment("flare-detection")
         with mlflow.start_run() as run:

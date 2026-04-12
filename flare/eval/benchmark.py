@@ -10,8 +10,6 @@ import csv
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import mlflow
-
 from flare.detection.detector import AnomalyResult
 from flare.llm.schemas import QualityScore, SummarizedIncident, UsageStats
 
@@ -188,6 +186,7 @@ class Benchmark:
         )
 
         if run_id:
+            import mlflow
             with mlflow.start_run(run_id=run_id):
                 mlflow.log_metric("precision", round(precision, 4))
                 mlflow.log_metric("recall", round(recall, 4))
@@ -242,6 +241,7 @@ class Benchmark:
         mean_lat = sum(latencies) / len(latencies) if latencies else 0.0
 
         if run_id:
+            import mlflow
             with mlflow.start_run(run_id=run_id):
                 mlflow.log_metric("mean_relevance", round(mean_rel, 4))
                 mlflow.log_metric("mean_specificity", round(mean_spec, 4))
