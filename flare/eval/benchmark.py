@@ -186,14 +186,17 @@ class Benchmark:
         )
 
         if run_id:
-            import mlflow
-            with mlflow.start_run(run_id=run_id):
-                mlflow.log_metric("precision", round(precision, 4))
-                mlflow.log_metric("recall", round(recall, 4))
-                mlflow.log_metric("f1", round(f1, 4))
-                mlflow.log_metric("true_positives", tp)
-                mlflow.log_metric("false_positives", fp)
-                mlflow.log_metric("false_negatives", fn)
+            try:
+                import mlflow
+                with mlflow.start_run(run_id=run_id):
+                    mlflow.log_metric("precision", round(precision, 4))
+                    mlflow.log_metric("recall", round(recall, 4))
+                    mlflow.log_metric("f1", round(f1, 4))
+                    mlflow.log_metric("true_positives", tp)
+                    mlflow.log_metric("false_positives", fp)
+                    mlflow.log_metric("false_negatives", fn)
+            except ImportError:
+                pass
 
         return BenchmarkResult(
             precision=precision,
@@ -241,14 +244,17 @@ class Benchmark:
         mean_lat = sum(latencies) / len(latencies) if latencies else 0.0
 
         if run_id:
-            import mlflow
-            with mlflow.start_run(run_id=run_id):
-                mlflow.log_metric("mean_relevance", round(mean_rel, 4))
-                mlflow.log_metric("mean_specificity", round(mean_spec, 4))
-                mlflow.log_metric("mean_actionability", round(mean_act, 4))
-                mlflow.log_metric("mean_quality", round(mean_q, 4))
-                mlflow.log_metric("total_cost_usd", round(total_cost, 6))
-                mlflow.log_metric("mean_latency_ms", round(mean_lat, 2))
+            try:
+                import mlflow
+                with mlflow.start_run(run_id=run_id):
+                    mlflow.log_metric("mean_relevance", round(mean_rel, 4))
+                    mlflow.log_metric("mean_specificity", round(mean_spec, 4))
+                    mlflow.log_metric("mean_actionability", round(mean_act, 4))
+                    mlflow.log_metric("mean_quality", round(mean_q, 4))
+                    mlflow.log_metric("total_cost_usd", round(total_cost, 6))
+                    mlflow.log_metric("mean_latency_ms", round(mean_lat, 2))
+            except ImportError:
+                pass
 
         return LLMEvalResult(
             quality_scores=quality_scores,

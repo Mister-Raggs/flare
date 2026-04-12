@@ -155,9 +155,12 @@ class AnomalyDetector:
         import json
         import tempfile
 
-        import mlflow
-        import mlflow.sklearn
-        import mlflow.tracking
+        try:
+            import mlflow
+            import mlflow.sklearn
+            import mlflow.tracking
+        except ImportError:
+            return False
 
         try:
             model = mlflow.sklearn.load_model("models:/flare-isolation-forest/Production")
@@ -196,8 +199,11 @@ class AnomalyDetector:
         import json
         import tempfile
 
-        import mlflow
-        import mlflow.sklearn
+        try:
+            import mlflow
+            import mlflow.sklearn
+        except ImportError:
+            return
 
         mlflow.set_experiment("flare-detection")
         with mlflow.start_run() as run:
