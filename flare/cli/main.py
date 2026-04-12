@@ -50,11 +50,19 @@ def cli() -> None:
     type=float,
     help="Expected anomaly ratio (0.0-0.5).",
 )
+@click.option(
+    "--use-registry",
+    "use_registry",
+    is_flag=True,
+    default=False,
+    help="Load Production model from MLflow registry instead of retraining.",
+)
 def detect(
     input_path: str,
     output_path: str | None,
     labels: str | None,
     contamination: float,
+    use_registry: bool,
 ) -> None:
     """Parse logs, detect anomalies, and cluster into incidents."""
     from flare.clustering import IncidentClusterer
@@ -80,7 +88,7 @@ def detect(
 
     # Step 2: Detect anomalies
     console.print(Panel("[bold cyan]Step 2/3[/] Detecting anomalies...", expand=False))
-    detector = AnomalyDetector(contamination=contamination)
+    detector = AnomalyDetector(contamination=contamination, use_registry=use_registry)
     results = detector.detect(batch.events)
 
     anomalies = [r for r in results if r.is_anomaly]
@@ -469,6 +477,138 @@ def collect(
             expand=False,
         )
     )
+
+
+@cli.group()
+def model() -> None:
+    """Manage registered MLflow models."""
+
+
+@model.command("list")
+@click.option("--name", default="flare-isolation-forest", show_default=True)
+def model_list(name: str) -> None:
+    """List all versions of a registered model."""
+    from mlflow.tracking import MlflowClient
+
+    client = MlflowClient()
+    try:
+        versions = client.search_model_versions(f"name='{name}'")
+    except Exception as e:
+        console.print(f"[red]{e}[/]")
+        return
+
+    if not versions:
+        console.print(f"[yellow]No versions found for '{name}'.[/]")
+        return
+
+    table = Table(title=f"Model: {name}", show_lines=True)
+    table.add_column("Version", style="bold", width=8)
+    table.add_column("Stage", width=12)
+    table.add_column("Run ID", style="dim", width=36)
+    table.add_column("Created", width=20)
+
+    stage_colors = {"Production": "green", "Staging": "yellow", "Archived": "dim", "None": "white"}
+    for v in sorted(versions, key=lambda x: int(x.version)):
+        stage = v.current_stage
+        color = stage_colors.get(stage or "None", "white")
+        import datetime
+        created = datetime.datetime.fromtimestamp(
+            v.creation_timestamp / 1000
+        ).strftime("%Y-%m-%d %H:%M")
+        table.add_row(str(v.version), f"[{color}]{stage}[/{color}]", str(v.run_id or ""), created)
+
+    console.print(table)
+
+
+@model.command("promote")
+@click.argument("version", type=int)
+@click.argument("stage", type=click.Choice(
+    ["Staging", "Production", "Archived"], case_sensitive=False
+))
+@click.option("--name", default="flare-isolation-forest", show_default=True)
+@click.option("--archive-existing", is_flag=True, default=True,
+              help="Archive any existing model in the target stage.")
+def model_promote(version: int, stage: str, name: str, archive_existing: bool) -> None:
+    """Promote a model version to Staging, Production, or Archived.
+
+    \b
+    Examples:
+      flare model promote 3 Production
+      flare model promote 2 Staging --no-archive-existing
+    """
+    from mlflow.tracking import MlflowClient
+
+    client = MlflowClient()
+
+    if archive_existing:
+        try:
+            existing = client.search_model_versions(f"name='{name}'")
+            for v in existing:
+                if v.current_stage == stage and int(v.version) != version:
+                    client.transition_model_version_stage(
+                        name=name, version=v.version, stage="Archived"
+                    )
+                    console.print(f"  Archived v{v.version} (was in {stage})")
+        except Exception:
+            pass
+
+    try:
+        client.transition_model_version_stage(
+            name=name,
+            version=str(version),
+            stage=stage,
+        )
+        color = {"Production": "green", "Staging": "yellow", "Archived": "dim"}.get(stage, "white")
+        console.print(
+            Panel(
+                f"[{color}]v{version} → {stage}[/{color}]\n"
+                f"[dim]Model: {name}[/]",
+                title="Promoted",
+                expand=False,
+            )
+        )
+    except Exception as e:
+        console.print(f"[red]{e}[/]")
+
+
+@model.command("compare")
+@click.option("--name", default="flare-detection", show_default=True,
+              help="MLflow experiment name to compare runs from.")
+@click.option("--n", default=5, show_default=True, help="Number of recent runs to show.")
+def model_compare(name: str, n: int) -> None:
+    """Compare recent detection runs by key metrics."""
+    import mlflow
+
+    runs = mlflow.search_runs(  # type: ignore[assignment]
+        experiment_names=[name],
+        order_by=["start_time DESC"],
+        max_results=n,
+    )
+
+    if runs.empty:  # type: ignore[union-attr]
+        console.print(f"[yellow]No runs found in experiment '{name}'.[/]")
+        return
+
+    table = Table(title=f"Recent runs — {name}", show_lines=True)
+    table.add_column("Run", style="dim", width=8)
+    table.add_column("contamination", width=14)
+    table.add_column("vocab_size", width=10)
+    table.add_column("anomaly_rate", width=12)
+    table.add_column("mean_score", width=12)
+    table.add_column("anomaly_count", width=14)
+
+    for _, row in runs.iterrows():  # type: ignore[union-attr]
+        p = row.get
+        table.add_row(
+            str(row.get("run_id", ""))[:8],
+            str(p("params.contamination", "-")),
+            str(p("params.vocab_size", "-")),
+            str(p("metrics.anomaly_rate", "-")),
+            str(p("metrics.mean_anomaly_score", "-")),
+            str(p("metrics.anomaly_count", "-")),
+        )
+
+    console.print(table)
 
 
 if __name__ == "__main__":

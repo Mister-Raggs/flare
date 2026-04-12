@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass, field
 
+import mlflow
+import mlflow.sklearn
 import numpy as np
 from sklearn.ensemble import IsolationForest
 
@@ -62,6 +64,7 @@ class AnomalyDetector:
         contamination: float = 0.03,
         n_estimators: int = 200,
         random_state: int = 42,
+        use_registry: bool = False,
     ) -> None:
         """Initialize the detector.
 
@@ -69,18 +72,24 @@ class AnomalyDetector:
             contamination: Expected proportion of anomalies in the data.
             n_estimators: Number of trees in the Isolation Forest.
             random_state: Random seed for reproducibility.
+            use_registry: If True, attempt to load the Production model from
+                the MLflow Model Registry instead of training a new one.
+                Falls back to training if no Production model exists.
         """
         self.contamination = contamination
         self.n_estimators = n_estimators
         self.random_state = random_state
+        self.use_registry = use_registry
         self._model: IsolationForest | None = None
         self._template_vocab: list[int] = []
+        self.mlflow_run_id: str | None = None
 
     def detect(self, events: list[LogEvent]) -> list[AnomalyResult]:
         """Run anomaly detection on a list of log events.
 
-        Groups events by block_id, builds feature vectors from template
-        frequency, and applies Isolation Forest.
+        If ``use_registry=True``, loads the Production model from the MLflow
+        Model Registry and runs inference only (no retraining). Falls back to
+        training if no Production model is available.
 
         Args:
             events: List of parsed log events.
@@ -88,26 +97,38 @@ class AnomalyDetector:
         Returns:
             List of AnomalyResult, one per block.
         """
-        # Group events by block_id
         blocks = self._group_by_block(events)
         if not blocks:
             return []
 
-        # Build feature matrix
         block_ids = sorted(blocks.keys())
         self._build_vocab(events)
         feature_matrix = self._build_features(blocks, block_ids)
 
-        # Fit and predict with Isolation Forest
-        self._model = IsolationForest(
-            contamination=self.contamination,
-            n_estimators=self.n_estimators,
-            random_state=self.random_state,
-        )
-        predictions = self._model.fit_predict(feature_matrix)
+        loaded_from_registry = False
+        if self.use_registry:
+            loaded_from_registry = self._try_load_production(feature_matrix)
+
+        if not loaded_from_registry:
+            self._model = IsolationForest(
+                contamination=self.contamination,
+                n_estimators=self.n_estimators,
+                random_state=self.random_state,
+            )
+            self._model.fit(feature_matrix)
+
+        assert self._model is not None
+        predictions = self._model.predict(feature_matrix)
         scores = self._model.decision_function(feature_matrix)
 
-        # Build results
+        self._log_to_mlflow(
+            block_ids=block_ids,
+            predictions=predictions,
+            scores=scores,
+            feature_matrix=feature_matrix,
+            register=not loaded_from_registry,
+        )
+
         results: list[AnomalyResult] = []
         for i, bid in enumerate(block_ids):
             block_events = blocks[bid]
@@ -124,6 +145,89 @@ class AnomalyDetector:
             )
 
         return results
+
+    def _try_load_production(self, feature_matrix: np.ndarray) -> bool:
+        """Attempt to load the Production model from the MLflow registry.
+
+        Also loads the saved vocab so the feature space matches.
+
+        Returns:
+            True if a Production model was loaded successfully, False otherwise.
+        """
+        import json
+        import tempfile
+
+        try:
+            model = mlflow.sklearn.load_model("models:/flare-isolation-forest/Production")
+        except Exception:
+            return False
+
+        # Load the vocab saved with this model version
+        try:
+            client = mlflow.tracking.MlflowClient()
+            versions = client.search_model_versions(
+                "name='flare-isolation-forest' and current_stage='Production'"
+            )
+            if not versions:
+                return False
+            run_id = versions[0].run_id or ""
+            with tempfile.TemporaryDirectory() as tmp:
+                local = client.download_artifacts(run_id, "vocab.json", tmp)
+                with open(local) as f:
+                    self._template_vocab = json.load(f)
+        except Exception:
+            # No vocab artifact — model was registered before vocab saving was added
+            pass
+
+        self._model = model
+        return True
+
+    def _log_to_mlflow(
+        self,
+        block_ids: list[str],
+        predictions: np.ndarray,
+        scores: np.ndarray,
+        feature_matrix: np.ndarray,
+        register: bool,
+    ) -> None:
+        """Log params, metrics, and optionally register the model."""
+        import json
+        import tempfile
+
+        mlflow.set_experiment("flare-detection")
+        with mlflow.start_run() as run:
+            mlflow.log_param("contamination", self.contamination)
+            mlflow.log_param("n_estimators", self.n_estimators)
+            mlflow.log_param("random_state", self.random_state)
+            mlflow.log_param("total_blocks", len(block_ids))
+            mlflow.log_param("vocab_size", len(self._template_vocab))
+            mlflow.log_param("from_registry", not register)
+
+            anomaly_count = int(sum(predictions == -1))
+            mlflow.log_metric("anomaly_count", anomaly_count)
+            mlflow.log_metric("anomaly_rate", round(anomaly_count / len(block_ids), 4))
+            mlflow.log_metric("mean_anomaly_score", round(float(scores.mean()), 4))
+            mlflow.log_metric("min_anomaly_score", round(float(scores.min()), 4))
+
+            if register:
+                mlflow.sklearn.log_model(self._model, "isolation-forest")
+
+                # Save vocab alongside model so it can be reloaded later
+                with tempfile.NamedTemporaryFile(
+                    mode="w", suffix=".json", delete=False
+                ) as f:
+                    json.dump(self._template_vocab, f)
+                    vocab_path = f.name
+                mlflow.log_artifact(vocab_path, artifact_path="")
+                import os
+                os.unlink(vocab_path)
+
+                mlflow.register_model(
+                    f"runs:/{run.info.run_id}/isolation-forest",
+                    "flare-isolation-forest",
+                )
+
+            self.mlflow_run_id = run.info.run_id
 
     def _group_by_block(self, events: list[LogEvent]) -> dict[str, list[LogEvent]]:
         """Group log events by their block_id."""

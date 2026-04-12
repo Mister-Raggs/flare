@@ -26,6 +26,7 @@ DEFAULT_MODEL = "claude-sonnet-4-20250514"
 DEFAULT_MAX_TOKENS = 1024
 DEFAULT_MAX_RETRIES = 3
 DEFAULT_BASE_DELAY = 1.0
+DEFAULT_TIMEOUT = 60.0  # seconds per API call
 
 
 @dataclass
@@ -60,6 +61,7 @@ class AnthropicClient:
         max_tokens: int = DEFAULT_MAX_TOKENS,
         max_retries: int = DEFAULT_MAX_RETRIES,
         base_delay: float = DEFAULT_BASE_DELAY,
+        timeout: float = DEFAULT_TIMEOUT,
         api_key: str | None = None,
     ) -> None:
         """Initialize the client.
@@ -69,6 +71,7 @@ class AnthropicClient:
             max_tokens: Maximum tokens in the response.
             max_retries: Maximum number of retry attempts.
             base_delay: Base delay in seconds for exponential backoff.
+            timeout: Per-call timeout in seconds. Raises APITimeoutError if exceeded.
             api_key: API key. If None, reads from ANTHROPIC_API_KEY env var.
 
         Raises:
@@ -78,6 +81,7 @@ class AnthropicClient:
         self.max_tokens = max_tokens
         self.max_retries = max_retries
         self.base_delay = base_delay
+        self.timeout = timeout
 
         resolved_key = api_key or os.environ.get("ANTHROPIC_API_KEY", "")
         if not resolved_key:
@@ -118,6 +122,7 @@ class AnthropicClient:
                     temperature=temperature,
                     system=system,
                     messages=[{"role": "user", "content": user}],
+                    timeout=self.timeout,
                 )
 
                 latency_ms = (time.monotonic() - start_time) * 1000
@@ -139,6 +144,18 @@ class AnthropicClient:
                 content = self._parse_json(raw_text)
 
                 return LLMResponse(content=content, raw_text=raw_text, usage=usage)
+
+            except anthropic.APITimeoutError as e:
+                last_error = e
+                delay = self.base_delay * (2**attempt)
+                logger.warning(
+                    "Timeout after %.1fs (attempt %d/%d), retrying in %.1fs",
+                    self.timeout,
+                    attempt + 1,
+                    self.max_retries,
+                    delay,
+                )
+                time.sleep(delay)
 
             except anthropic.RateLimitError as e:
                 last_error = e

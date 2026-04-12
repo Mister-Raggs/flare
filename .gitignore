@@ -34,6 +34,10 @@ HDFS_v1/
 results/
 results.json
 
+# MLflow
+mlflow.db
+mlruns/
+
 # Caches
 .pytest_cache/
 .ruff_cache/

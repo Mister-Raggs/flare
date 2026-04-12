@@ -16,7 +16,9 @@ logger = logging.getLogger("flare.api.detect")
 router = APIRouter()
 
 
-def _run_detection(log_text: str, contamination: float) -> DetectResponse:
+def _run_detection(
+    log_text: str, contamination: float, use_registry: bool = False
+) -> DetectResponse:
     """Run the full ingestion → detection → clustering pipeline.
 
     This is synchronous because Drain3 and scikit-learn are CPU-bound.
@@ -49,7 +51,7 @@ def _run_detection(log_text: str, contamination: float) -> DetectResponse:
                 processing_time_ms=0,
             )
 
-        detector = AnomalyDetector(contamination=contamination)
+        detector = AnomalyDetector(contamination=contamination, use_registry=use_registry)
         results = detector.detect(batch.events)
         anomalies = [r for r in results if r.is_anomaly]
 
@@ -92,6 +94,7 @@ def _run_detection(log_text: str, contamination: float) -> DetectResponse:
         total_events=len(batch.events),
         templates_discovered=batch.template_count,
         processing_time_ms=elapsed_ms,
+        mlflow_run_id=getattr(detector, "mlflow_run_id", None),
     )
 
 
@@ -111,7 +114,7 @@ async def detect(request: DetectRequest) -> DetectResponse:
         len(request.log_text),
         request.contamination,
     )
-    return _run_detection(request.log_text, request.contamination)
+    return _run_detection(request.log_text, request.contamination, request.use_registry)
 
 
 @router.post(
@@ -123,6 +126,7 @@ async def detect(request: DetectRequest) -> DetectResponse:
 async def detect_upload(
     file: UploadFile,
     contamination: float = 0.03,
+    use_registry: bool = False,
 ) -> DetectResponse:
     """Run anomaly detection on an uploaded log file."""
     content = await file.read()
@@ -133,4 +137,4 @@ async def detect_upload(
         len(content),
         contamination,
     )
-    return _run_detection(log_text, contamination)
+    return _run_detection(log_text, contamination, use_registry)

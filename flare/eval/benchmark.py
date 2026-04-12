@@ -10,6 +10,7 @@ import csv
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import mlflow
 from flare.detection.detector import AnomalyResult
 from flare.llm.schemas import QualityScore, SummarizedIncident, UsageStats
 
@@ -146,6 +147,7 @@ class Benchmark:
         self,
         results: list[AnomalyResult],
         labels: dict[str, bool],
+        run_id: str | None = None,
     ) -> BenchmarkResult:
         """Compute precision, recall, F1 against ground truth labels.
 
@@ -184,6 +186,15 @@ class Benchmark:
             else 0.0
         )
 
+        if run_id:
+            with mlflow.start_run(run_id=run_id):
+                mlflow.log_metric("precision", round(precision, 4))
+                mlflow.log_metric("recall", round(recall, 4))
+                mlflow.log_metric("f1", round(f1, 4))
+                mlflow.log_metric("true_positives", tp)
+                mlflow.log_metric("false_positives", fp)
+                mlflow.log_metric("false_negatives", fn)
+
         return BenchmarkResult(
             precision=precision,
             recall=recall,
@@ -200,6 +211,7 @@ class Benchmark:
         summarized: list[SummarizedIncident],
         quality_scores: list[QualityScore],
         eval_usage: list[UsageStats],
+        run_id: str | None = None,
     ) -> LLMEvalResult:
         """Compute aggregated LLM evaluation metrics.
 
@@ -227,6 +239,15 @@ class Benchmark:
         total_cost = sum(u.estimated_cost_usd for u in all_usage)
         latencies = [u.latency_ms for u in all_usage if u.latency_ms > 0]
         mean_lat = sum(latencies) / len(latencies) if latencies else 0.0
+
+        if run_id:
+            with mlflow.start_run(run_id=run_id):
+                mlflow.log_metric("mean_relevance", round(mean_rel, 4))
+                mlflow.log_metric("mean_specificity", round(mean_spec, 4))
+                mlflow.log_metric("mean_actionability", round(mean_act, 4))
+                mlflow.log_metric("mean_quality", round(mean_q, 4))
+                mlflow.log_metric("total_cost_usd", round(total_cost, 6))
+                mlflow.log_metric("mean_latency_ms", round(mean_lat, 2))
 
         return LLMEvalResult(
             quality_scores=quality_scores,

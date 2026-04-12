@@ -43,6 +43,7 @@ def _to_incident(payload: IncidentPayload):  # type: ignore[no-untyped-def]
 def _run_summarization(
     incident_payloads: list[IncidentPayload],
     run_eval: bool,
+    mlflow_run_id: str | None = None,
 ) -> SummarizeResponse:
     """Run LLM summarization (and optional eval) on incidents."""
     settings = get_settings()
@@ -90,7 +91,9 @@ def _run_summarization(
         from flare.eval.benchmark import Benchmark
 
         bench = Benchmark()
-        llm_eval = bench.evaluate_llm(summarized, quality_scores, eval_usage_list)
+        llm_eval = bench.evaluate_llm(
+            summarized, quality_scores, eval_usage_list, run_id=mlflow_run_id
+        )
         eval_results = EvalReport(
             mean_relevance=round(llm_eval.mean_relevance, 2),
             mean_specificity=round(llm_eval.mean_specificity, 2),
@@ -168,7 +171,7 @@ async def analyze(request: AnalyzeRequest) -> AnalyzeResponse:
     overall_start = time.monotonic()
 
     # Step 1: Detection
-    detection = _run_detection(request.log_text, request.contamination)
+    detection = _run_detection(request.log_text, request.contamination, request.use_registry)
 
     if not detection.incidents:
         return AnalyzeResponse(
@@ -181,7 +184,9 @@ async def analyze(request: AnalyzeRequest) -> AnalyzeResponse:
         )
 
     # Step 2: Summarization
-    summarize_resp = _run_summarization(detection.incidents, request.run_eval)
+    summarize_resp = _run_summarization(
+        detection.incidents, request.run_eval, mlflow_run_id=detection.mlflow_run_id
+    )
 
     total_ms = int((time.monotonic() - overall_start) * 1000)
 

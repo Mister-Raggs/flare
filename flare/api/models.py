@@ -28,6 +28,10 @@ class DetectRequest(BaseModel):
         le=0.5,
         description="Expected anomaly ratio for Isolation Forest (0.0-0.5).",
     )
+    use_registry: bool = Field(
+        default=False,
+        description="Load the Production model from MLflow registry instead of retraining.",
+    )
 
 
 class SummarizeRequest(BaseModel):
@@ -50,6 +54,10 @@ class AnalyzeRequest(BaseModel):
         min_length=1,
     )
     contamination: float = Field(default=0.03, ge=0.0, le=0.5)
+    use_registry: bool = Field(
+        default=False,
+        description="Load the Production model from MLflow registry instead of retraining.",
+    )
     run_eval: bool = Field(
         default=False,
         description="Run quality evaluation on LLM summaries.",
@@ -118,6 +126,7 @@ class DetectResponse(BaseModel):
     total_events: int
     templates_discovered: int
     processing_time_ms: int
+    mlflow_run_id: str | None = None
 
 
 class SummaryPayload(BaseModel):
