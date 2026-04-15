@@ -80,9 +80,15 @@ class AnomalyDetector:
         self.use_registry = use_registry
         self._model: IsolationForest | None = None
         self._template_vocab: list[int] = []
+        self._last_feature_matrix: np.ndarray | None = None
         self.mlflow_run_id: str | None = None
 
-    def detect(self, events: list[LogEvent]) -> list[AnomalyResult]:
+    def detect(
+        self,
+        events: list[LogEvent],
+        track: bool = True,
+        source_path: str | None = None,
+    ) -> list[AnomalyResult]:
         """Run anomaly detection on a list of log events.
 
         If ``use_registry=True``, loads the Production model from the MLflow
@@ -91,6 +97,9 @@ class AnomalyDetector:
 
         Args:
             events: List of parsed log events.
+            track: If False, skip MLflow logging entirely (useful for sweeps).
+            source_path: Optional path to the source log file, used for
+                dataset lineage tracking in MLflow.
 
         Returns:
             List of AnomalyResult, one per block.
@@ -102,6 +111,7 @@ class AnomalyDetector:
         block_ids = sorted(blocks.keys())
         self._build_vocab(events)
         feature_matrix = self._build_features(blocks, block_ids)
+        self._last_feature_matrix = feature_matrix
 
         loaded_from_registry = False
         if self.use_registry:
@@ -119,13 +129,15 @@ class AnomalyDetector:
         predictions = self._model.predict(feature_matrix)
         scores = self._model.decision_function(feature_matrix)
 
-        self._log_to_mlflow(
-            block_ids=block_ids,
-            predictions=predictions,
-            scores=scores,
-            feature_matrix=feature_matrix,
-            register=not loaded_from_registry,
-        )
+        if track:
+            self._log_to_mlflow(
+                block_ids=block_ids,
+                predictions=predictions,
+                scores=scores,
+                feature_matrix=feature_matrix,
+                register=not loaded_from_registry,
+                source_path=source_path,
+            )
 
         results: list[AnomalyResult] = []
         for i, bid in enumerate(block_ids):
@@ -194,19 +206,26 @@ class AnomalyDetector:
         scores: np.ndarray,
         feature_matrix: np.ndarray,
         register: bool,
+        source_path: str | None = None,
     ) -> None:
-        """Log params, metrics, and optionally register the model."""
+        """Log params, metrics, artifacts, and optionally register the model."""
         import json
+        import os
+        import subprocess
+        import sys
         import tempfile
+        from pathlib import Path
 
         try:
             import mlflow
             import mlflow.sklearn
+            from mlflow.models import infer_signature
         except ImportError:
             return
 
         mlflow.set_experiment("flare-detection")
         with mlflow.start_run() as run:
+            # ── params ───────────────────────────────────────────────────────
             mlflow.log_param("contamination", self.contamination)
             mlflow.log_param("n_estimators", self.n_estimators)
             mlflow.log_param("random_state", self.random_state)
@@ -214,14 +233,49 @@ class AnomalyDetector:
             mlflow.log_param("vocab_size", len(self._template_vocab))
             mlflow.log_param("from_registry", not register)
 
+            # ── metrics ──────────────────────────────────────────────────────
             anomaly_count = int(sum(predictions == -1))
             mlflow.log_metric("anomaly_count", anomaly_count)
             mlflow.log_metric("anomaly_rate", round(anomaly_count / len(block_ids), 4))
             mlflow.log_metric("mean_anomaly_score", round(float(scores.mean()), 4))
             mlflow.log_metric("min_anomaly_score", round(float(scores.min()), 4))
 
+            # ── tags: reproducibility metadata ───────────────────────────────
+            try:
+                git_sha = subprocess.check_output(
+                    ["git", "rev-parse", "--short", "HEAD"],
+                    stderr=subprocess.DEVNULL,
+                ).decode().strip()
+            except Exception:
+                git_sha = "unknown"
+
+            mlflow.set_tags({
+                "git_sha": git_sha,
+                "python_version": sys.version.split()[0],
+                "dataset": Path(source_path).stem if source_path else "unknown",
+                "experimenter": "flare-detector",
+            })
+
+            # ── dataset lineage ──────────────────────────────────────────────
+            try:
+                import mlflow.data
+                dataset = mlflow.data.from_numpy(
+                    feature_matrix,
+                    source=source_path or "in-memory",
+                    name=f"{Path(source_path).stem if source_path else 'log'}-features",
+                )
+                mlflow.log_input(dataset, context="training")
+            except Exception:
+                pass  # dataset logging is optional (requires mlflow >= 2.4)
+
             if register:
-                mlflow.sklearn.log_model(self._model, "isolation-forest")
+                # ── model signature ──────────────────────────────────────────
+                signature = infer_signature(feature_matrix, predictions)
+                mlflow.sklearn.log_model(
+                    self._model,
+                    "isolation-forest",
+                    signature=signature,
+                )
 
                 # Save vocab alongside model so it can be reloaded later
                 with tempfile.NamedTemporaryFile(
@@ -230,7 +284,6 @@ class AnomalyDetector:
                     json.dump(self._template_vocab, f)
                     vocab_path = f.name
                 mlflow.log_artifact(vocab_path, artifact_path="")
-                import os
                 os.unlink(vocab_path)
 
                 mlflow.register_model(

@@ -89,7 +89,7 @@ def detect(
     # Step 2: Detect anomalies
     console.print(Panel("[bold cyan]Step 2/3[/] Detecting anomalies...", expand=False))
     detector = AnomalyDetector(contamination=contamination, use_registry=use_registry)
-    results = detector.detect(batch.events)
+    results = detector.detect(batch.events, source_path=input_path)
 
     anomalies = [r for r in results if r.is_anomaly]
     console.print(
@@ -223,7 +223,24 @@ def summarize(
             )
 
         bench = Benchmark()
-        eval_result = bench.evaluate_llm(summarized, quality_scores, eval_usage)
+
+        # Create an MLflow run so LLM eval metrics land in the tracking server
+        mlflow_run_id: str | None = None
+        try:
+            import mlflow
+            mlflow.set_experiment("flare-llm-eval")
+            with mlflow.start_run(run_name="summarize") as _run:
+                mlflow.log_param("num_incidents", len(incidents))
+                mlflow.log_param("model", client.model)
+                mlflow_run_id = _run.info.run_id
+        except ImportError:
+            pass
+
+        eval_result = bench.evaluate_llm(
+            summarized, quality_scores, eval_usage, run_id=mlflow_run_id
+        )
+        if mlflow_run_id:
+            console.print(f"  [dim]MLflow run: {mlflow_run_id[:8]}[/]")
         _display_llm_eval(eval_result)
     else:
         console.print(Panel("[dim]Step 3/3[/] Skipping eval (use --eval to enable)", expand=False))
@@ -609,6 +626,197 @@ def model_compare(name: str, n: int) -> None:
         )
 
     console.print(table)
+
+
+@model.command("sweep")
+@click.option(
+    "--input", "-i",
+    "input_path",
+    required=True,
+    type=click.Path(exists=True),
+    help="Path to raw log file to train on.",
+)
+@click.option(
+    "--labels",
+    required=True,
+    type=click.Path(exists=True),
+    help="Path to ground truth labels CSV for F1 evaluation.",
+)
+@click.option(
+    "--models",
+    "models_str",
+    default="isolation_forest",
+    show_default=True,
+    help=(
+        "Comma-separated model keys to compare. "
+        "Available: isolation_forest, lof, ocsvm, elliptic."
+    ),
+)
+@click.option(
+    "--contamination-values",
+    "contamination_str",
+    default=None,
+    help=(
+        "Override contamination grid for isolation_forest only "
+        "(e.g. '0.01,0.03,0.05'). Uses model default when omitted."
+    ),
+)
+@click.option(
+    "--n-estimators-values",
+    "n_estimators_str",
+    default=None,
+    help=(
+        "Override n_estimators grid for isolation_forest only "
+        "(e.g. '100,200,300'). Uses model default when omitted."
+    ),
+)
+@click.option(
+    "--promote",
+    is_flag=True,
+    default=False,
+    help="Register best model and promote to Staging after sweep.",
+)
+def model_sweep(
+    input_path: str,
+    labels: str,
+    models_str: str,
+    contamination_str: str | None,
+    n_estimators_str: str | None,
+    promote: bool,
+) -> None:
+    """Compare anomaly detection models via a grid search, logged as nested MLflow runs.
+
+    \b
+    Each (model, params) combination trains a fresh estimator, evaluates it
+    against ground truth labels, and logs params + F1/precision/recall + a
+    confusion matrix PNG as a child run nested under a parent sweep run.
+
+    \b
+    Available models:
+      isolation_forest   Isolation Forest (sklearn)
+      lof                Local Outlier Factor (sklearn, novelty=True)
+      ocsvm              One-Class SVM (sklearn, rbf kernel)
+      elliptic           Elliptic Envelope (sklearn, assumes Gaussian)
+
+    \b
+    Examples:
+      # Compare all four models with their default param grids
+      flare model sweep -i logs/hdfs_sample.log --labels logs/sample_labels.csv \\
+          --models isolation_forest,lof,ocsvm,elliptic
+
+      # IF-only hyperparameter sweep with custom grid
+      flare model sweep -i logs/hdfs_sample.log --labels logs/sample_labels.csv \\
+          --contamination-values 0.01,0.03,0.05 --n-estimators-values 100,200 --promote
+    """
+    from flare.experiment.sweep import MODELS, HyperparamSweep
+
+    model_names = [m.strip() for m in models_str.split(",")]
+    for name in model_names:
+        if name not in MODELS:
+            console.print(
+                f"[red]Unknown model '{name}'. "
+                f"Valid: {', '.join(MODELS.keys())}[/]"
+            )
+            return
+
+    contamination_values = (
+        [float(x.strip()) for x in contamination_str.split(",")]
+        if contamination_str else None
+    )
+    n_estimators_values = (
+        [int(x.strip()) for x in n_estimators_str.split(",")]
+        if n_estimators_str else None
+    )
+
+    from flare.experiment.sweep import _combo_count
+    n_combos = sum(
+        _combo_count(
+            HyperparamSweep(
+                model_names=[m],
+                contamination_values=contamination_values,
+                n_estimators_values=n_estimators_values,
+            )._get_param_grid(MODELS[m])
+        )
+        for m in model_names
+    )
+
+    console.print(
+        Panel(
+            f"[bold]models:[/]       {model_names}\n"
+            f"[bold]combinations:[/] {n_combos}\n"
+            f"[bold]labels:[/]       {labels}\n"
+            + ("[green]auto-promote best → Staging[/]"
+               if promote else "[dim]--promote to auto-stage best[/]"),
+            title="flare model sweep",
+            expand=False,
+        )
+    )
+
+    sweep = HyperparamSweep(
+        model_names=model_names,
+        contamination_values=contamination_values,
+        n_estimators_values=n_estimators_values,
+    )
+
+    try:
+        result = sweep.run(input_path, labels, promote_best=promote)
+    except (RuntimeError, ValueError) as e:
+        console.print(f"[red]{e}[/]")
+        return
+
+    # Results table — sorted best-first by sweep.run
+    table = Table(title="Sweep Results (ranked by F1)", show_lines=True)
+    table.add_column("Run ID", style="dim", width=10)
+    table.add_column("Model", width=22)
+    table.add_column("Params", width=28)
+    table.add_column("F1", width=10)
+    table.add_column("Precision", width=10)
+    table.add_column("Recall", width=8)
+
+    for r in result.all_results:
+        is_best = r["run_id"] == result.best_run_id
+        if r.get("skipped"):
+            f1_str = "[dim]skipped[/]"
+            prec_str = rec_str = "[dim]-[/]"
+        else:
+            f1_str = (
+                f"[bold green]{r['f1']:.4f} ★[/]"
+                if is_best else f"{r['f1']:.4f}"
+            )
+            prec_str = f"{r['precision']:.4f}"
+            rec_str = f"{r['recall']:.4f}"
+
+        from flare.experiment.sweep import _params_to_str
+        table.add_row(
+            r["run_id"][:8],
+            r["model"],
+            _params_to_str(r["params"]),
+            f1_str,
+            prec_str,
+            rec_str,
+        )
+
+    console.print()
+    console.print(table)
+
+    params_str = "  ".join(f"{k}={v}" for k, v in result.best_params.items())
+    promoted_line = (
+        "[green]Best model registered and promoted → Staging[/]"
+        if promote
+        else "[dim]Run with --promote to register and stage the best model[/]"
+    )
+    console.print(
+        Panel(
+            f"Best F1:     [bold green]{result.best_f1:.4f}[/]\n"
+            f"Best model:  [cyan]{result.best_model}[/]\n"
+            f"Best params: [dim]{params_str}[/]\n"
+            f"Best run:    [dim]{result.best_run_id[:8]}[/]\n"
+            f"Parent run:  [dim]{result.parent_run_id[:8]}[/]\n"
+            f"{promoted_line}",
+            title="Sweep complete",
+            expand=False,
+        )
+    )
 
 
 if __name__ == "__main__":
