@@ -36,6 +36,8 @@ from typing import Any
 from sklearn.covariance import EllipticEnvelope
 from sklearn.ensemble import IsolationForest
 from sklearn.neighbors import LocalOutlierFactor
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
 from sklearn.svm import OneClassSVM
 
 # ── Model spec registry ────────────────────────────────────────────────────────
@@ -274,9 +276,14 @@ class HyperparamSweep:
                         assert detector._last_feature_matrix is not None
                         feature_matrix = detector._last_feature_matrix
 
-                        estimator = spec.estimator_class(
+                        raw_estimator = spec.estimator_class(
                             **spec.default_params, **combo_params
                         )
+                        estimator = Pipeline([
+                            ("scaler", StandardScaler()),
+                            ("model", raw_estimator),
+                        ])
+                        mlflow.log_param("preprocessing", "StandardScaler")
                         try:
                             estimator.fit(feature_matrix)
                             predictions = estimator.predict(feature_matrix)
@@ -308,7 +315,7 @@ class HyperparamSweep:
                                         feature_matrix[i : i + 1]
                                     )[0]
                                     if hasattr(estimator, "score_samples")
-                                    else predictions[i]
+                                    else float(predictions[i])
                                 ),
                                 event_count=r.event_count,
                                 template_ids=r.template_ids,

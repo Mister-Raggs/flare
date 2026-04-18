@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import math
 from collections import Counter
 from dataclasses import dataclass, field
 
 import numpy as np
 from sklearn.ensemble import IsolationForest
 
-from flare.ingestion.models import LogEvent
+from flare.ingestion.models import LogEvent, LogLevel
 
 
 @dataclass
@@ -82,6 +83,11 @@ class AnomalyDetector:
         self._template_vocab: list[int] = []
         self._last_feature_matrix: np.ndarray | None = None
         self.mlflow_run_id: str | None = None
+
+    # Number of non-vocab feature columns appended after template frequencies.
+    # Layout: [template freqs × V] [event_count] [unique_templates] [span]
+    #         [entropy] [repeat_ratio] [unique_bigrams] [error_count] [warn_count]
+    _N_EXTRA: int = 8
 
     def detect(
         self,
@@ -191,7 +197,12 @@ class AnomalyDetector:
             with tempfile.TemporaryDirectory() as tmp:
                 local = client.download_artifacts(run_id, "vocab.json", tmp)
                 with open(local) as f:
-                    self._template_vocab = json.load(f)
+                    data = json.load(f)
+                # Support both old format (bare list) and new format (dict)
+                if isinstance(data, list):
+                    self._template_vocab = data
+                else:
+                    self._template_vocab = data.get("template_vocab", [])
         except Exception:
             # No vocab artifact — model was registered before vocab saving was added
             pass
@@ -277,11 +288,14 @@ class AnomalyDetector:
                     signature=signature,
                 )
 
-                # Save vocab alongside model so it can be reloaded later
+                # Save vocab + feature schema alongside model
                 with tempfile.NamedTemporaryFile(
                     mode="w", suffix=".json", delete=False
                 ) as f:
-                    json.dump(self._template_vocab, f)
+                    json.dump(
+                        {"template_vocab": self._template_vocab, "n_extra": self._N_EXTRA},
+                        f,
+                    )
                     vocab_path = f.name
                 mlflow.log_artifact(vocab_path, artifact_path="")
                 os.unlink(vocab_path)
@@ -309,29 +323,65 @@ class AnomalyDetector:
     def _build_features(
         self, blocks: dict[str, list[LogEvent]], block_ids: list[str]
     ) -> np.ndarray:
-        """Build feature matrix: rows=blocks, cols=template frequencies.
+        """Build feature matrix with template frequencies and sequence features.
 
-        Each block is represented by a vector where each dimension
-        is the count of a particular log template occurring in that block.
-        Additional features include total event count and unique template count.
+        Column layout (V = vocab size):
+          [0 … V-1]  template frequency counts
+          [V+0]      total event count
+          [V+1]      unique template count
+          [V+2]      event span  (max line_id - min line_id)
+          [V+3]      sequence entropy  (Shannon entropy of template ID sequence)
+          [V+4]      repeat ratio  (fraction of consecutive same-template pairs)
+          [V+5]      unique bigram count  (distinct A→B template transitions)
+          [V+6]      error / fatal event count
+          [V+7]      warn event count
         """
         vocab_index = {tid: idx for idx, tid in enumerate(self._template_vocab)}
+        vocab_size = len(self._template_vocab)
         n_blocks = len(block_ids)
-        n_features = len(self._template_vocab) + 2  # +2 for count features
-
-        matrix = np.zeros((n_blocks, n_features), dtype=np.float64)
+        matrix = np.zeros((n_blocks, vocab_size + self._N_EXTRA), dtype=np.float64)
 
         for i, bid in enumerate(block_ids):
             events = blocks[bid]
-            counts = Counter(e.template_id for e in events if e.template_id >= 0)
+            template_seq = [e.template_id for e in events if e.template_id >= 0]
+            counts = Counter(template_seq)
 
-            # Template frequency features
+            # ── template frequency features ───────────────────────────────────
             for tid, count in counts.items():
                 if tid in vocab_index:
                     matrix[i, vocab_index[tid]] = count
 
-            # Aggregate features
-            matrix[i, -2] = len(events)  # total event count
-            matrix[i, -1] = len(counts)  # unique template count
+            # ── aggregate counts ──────────────────────────────────────────────
+            matrix[i, vocab_size] = len(events)
+            matrix[i, vocab_size + 1] = len(counts)
+
+            # ── event span (line_id range as proxy for block duration) ────────
+            line_ids = [e.line_id for e in events]
+            matrix[i, vocab_size + 2] = (max(line_ids) - min(line_ids)) if len(line_ids) > 1 else 0
+
+            if template_seq:
+                total = len(template_seq)
+
+                # ── sequence entropy ──────────────────────────────────────────
+                matrix[i, vocab_size + 3] = -sum(
+                    (c / total) * math.log2(c / total) for c in counts.values()
+                )
+
+                if total > 1:
+                    pairs = list(zip(template_seq, template_seq[1:]))
+
+                    # ── repeat ratio (retry-storm detector) ───────────────────
+                    matrix[i, vocab_size + 4] = sum(a == b for a, b in pairs) / len(pairs)
+
+                    # ── unique bigram transitions ─────────────────────────────
+                    matrix[i, vocab_size + 5] = len(set(pairs))
+
+            # ── log level counts ──────────────────────────────────────────────
+            matrix[i, vocab_size + 6] = sum(
+                1 for e in events if e.level in (LogLevel.ERROR, LogLevel.FATAL)
+            )
+            matrix[i, vocab_size + 7] = sum(
+                1 for e in events if e.level == LogLevel.WARN
+            )
 
         return matrix
