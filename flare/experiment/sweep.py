@@ -35,6 +35,8 @@ from typing import Any
 
 from sklearn.covariance import EllipticEnvelope
 from sklearn.ensemble import IsolationForest
+from sklearn.kernel_approximation import Nystroem
+from sklearn.linear_model import SGDOneClassSVM
 from sklearn.neighbors import LocalOutlierFactor
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
@@ -53,6 +55,9 @@ class ModelSpec:
         default_params: Constructor kwargs always passed to the estimator
             (e.g. ``{"novelty": True}`` for LOF).
         param_grid: Mapping of param name → list of values to sweep over.
+        build_fn: Optional callable ``(combo_params) -> estimator``. When set,
+            overrides the default ``estimator_class(**default_params, **combo)``
+            construction (useful for multi-step pipelines like Nystroem+SGD).
     """
 
     name: str
@@ -60,6 +65,7 @@ class ModelSpec:
     estimator_class: type
     default_params: dict[str, Any]
     param_grid: dict[str, list[Any]]
+    build_fn: Any = None  # Callable[[dict], estimator] | None
 
 
 #: Built-in model registry — extend by adding entries here.
@@ -103,6 +109,25 @@ MODELS: dict[str, ModelSpec] = {
         param_grid={
             "contamination": [0.01, 0.03, 0.05],
         },
+    ),
+    "sgd_ocsvm": ModelSpec(
+        name="sgd_ocsvm",
+        display_name="SGD One-Class SVM",
+        # Nystroem approximates the RBF kernel cheaply; SGDOneClassSVM is
+        # then O(n) — together they match kernel OCSVM quality at a fraction
+        # of the O(n²) cost.
+        estimator_class=SGDOneClassSVM,
+        default_params={},
+        param_grid={
+            "nu": [0.01, 0.05, 0.10],
+            "n_components": [100, 300],
+        },
+        build_fn=lambda p: Pipeline([
+            ("nystroem", Nystroem(
+                kernel="rbf", n_components=p.pop("n_components"), random_state=42
+            )),
+            ("sgd_ocsvm", SGDOneClassSVM(nu=p.get("nu", 0.05), random_state=42)),
+        ]),
     ),
 }
 
@@ -181,6 +206,7 @@ class HyperparamSweep:
         log_path: str | Path,
         labels_path: str | Path,
         promote_best: bool = False,
+        use_cache: bool = True,
     ) -> SweepResult:
         """Execute the grid search and log results as nested MLflow runs.
 
@@ -210,13 +236,41 @@ class HyperparamSweep:
                 "Install with: pip install 'flare-log-analyzer[tracking]'"
             )
 
+        from rich.console import Console
+        from rich.progress import (
+            BarColumn,
+            MofNCompleteColumn,
+            Progress,
+            SpinnerColumn,
+            TaskProgressColumn,
+            TextColumn,
+            TimeElapsedColumn,
+            TimeRemainingColumn,
+        )
+
         from flare.detection.detector import AnomalyDetector
         from flare.eval.benchmark import Benchmark
         from flare.ingestion.parser import LogParser
 
+        console = Console()
         log_path = Path(log_path)
+
+        cache_path = log_path.with_suffix(".flare.cache")
+        cache_hit = use_cache and cache_path.exists() and (
+            cache_path.stat().st_mtime >= log_path.stat().st_mtime
+        )
+        parse_verb = (
+            "[bold green]Loading cache[/bold green]"
+            if cache_hit else "[bold cyan]Parsing[/bold cyan]"
+        )
+        console.print(f"{parse_verb} {log_path.name} …", end=" ")
         parser = LogParser()
-        batch = parser.parse_file(str(log_path))
+        batch = parser.parse_file(str(log_path), use_cache=use_cache)
+        # count blocks
+        _block_set: set[str] = {e.block_id for e in batch.events if e.block_id}
+        console.print(
+            f"[green]✓[/green] {len(batch.events):,} events → {len(_block_set):,} blocks"
+        )
 
         bench = Benchmark()
         labels = bench.load_labels(labels_path)
@@ -234,7 +288,20 @@ class HyperparamSweep:
         best_params: dict[str, Any] = {}
         all_results: list[dict[str, Any]] = []
 
-        with mlflow.start_run(run_name=f"sweep-{log_path.stem}") as parent_run:
+        progress = Progress(
+            SpinnerColumn(),
+            TextColumn("[bold]{task.description}"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            TaskProgressColumn(),
+            TimeElapsedColumn(),
+            TimeRemainingColumn(),
+            console=console,
+            transient=False,
+        )
+        sweep_task = progress.add_task("sweep", total=n_combos)
+
+        with progress, mlflow.start_run(run_name=f"sweep-{log_path.stem}") as parent_run:
             mlflow.set_tags({
                 "git_sha": git_sha,
                 "python_version": sys.version.split()[0],
@@ -257,6 +324,12 @@ class HyperparamSweep:
                     combo_params = dict(zip(param_names, combo))
                     run_name = f"{model_key}_{_params_to_str(combo_params)}"
 
+                    combo_str = _params_to_str(combo_params)
+                    progress.update(
+                        sweep_task,
+                        description=f"{spec.display_name}  {combo_str}",
+                    )
+
                     with mlflow.start_run(run_name=run_name, nested=True) as child_run:
                         mlflow.log_param("model_class", spec.display_name)
                         mlflow.log_param("model_key", model_key)
@@ -276,14 +349,25 @@ class HyperparamSweep:
                         assert detector._last_feature_matrix is not None
                         feature_matrix = detector._last_feature_matrix
 
-                        raw_estimator = spec.estimator_class(
-                            **spec.default_params, **combo_params
-                        )
-                        estimator = Pipeline([
-                            ("scaler", StandardScaler()),
-                            ("model", raw_estimator),
-                        ])
-                        mlflow.log_param("preprocessing", "StandardScaler")
+                        if spec.build_fn is not None:
+                            # Custom build path (e.g. Nystroem+SGDOneClassSVM):
+                            # build_fn receives a mutable copy of combo_params
+                            # and returns a ready-to-fit pipeline.
+                            raw_estimator = spec.build_fn(dict(combo_params))
+                            estimator = Pipeline([
+                                ("scaler", StandardScaler()),
+                                ("model", raw_estimator),
+                            ])
+                            mlflow.log_param("preprocessing", "StandardScaler+Nystroem")
+                        else:
+                            raw_estimator = spec.estimator_class(
+                                **spec.default_params, **combo_params
+                            )
+                            estimator = Pipeline([
+                                ("scaler", StandardScaler()),
+                                ("model", raw_estimator),
+                            ])
+                            mlflow.log_param("preprocessing", "StandardScaler")
                         try:
                             estimator.fit(feature_matrix)
                             predictions = estimator.predict(feature_matrix)
@@ -301,6 +385,11 @@ class HyperparamSweep:
                                 "recall": 0.0,
                                 "skipped": True,
                             })
+                            progress.advance(sweep_task)
+                            console.print(
+                                f"  [yellow]⚠[/yellow] {spec.display_name}  {combo_str}"
+                                f"  skipped: {str(exc)[:60]}"
+                            )
                             continue
 
                         # ── evaluate ──────────────────────────────────────
@@ -376,6 +465,13 @@ class HyperparamSweep:
                             "skipped": False,
                         }
                         all_results.append(entry)
+                        progress.advance(sweep_task)
+                        console.print(
+                            f"  [green]✓[/green] {spec.display_name}  {combo_str}"
+                            f"  F1=[bold]{bench_result.f1:.4f}[/bold]"
+                            f"  P={bench_result.precision:.4f}"
+                            f"  R={bench_result.recall:.4f}"
+                        )
 
                         if bench_result.f1 > best_f1:
                             best_f1 = bench_result.f1

@@ -676,6 +676,13 @@ def model_compare(name: str, n: int) -> None:
     default=False,
     help="Register best model and promote to Staging after sweep.",
 )
+@click.option(
+    "--no-cache",
+    "no_cache",
+    is_flag=True,
+    default=False,
+    help="Force full re-parse even if a .flare.cache file exists.",
+)
 def model_sweep(
     input_path: str,
     labels: str,
@@ -683,6 +690,7 @@ def model_sweep(
     contamination_str: str | None,
     n_estimators_str: str | None,
     promote: bool,
+    no_cache: bool,
 ) -> None:
     """Compare anomaly detection models via a grid search, logged as nested MLflow runs.
 
@@ -702,7 +710,7 @@ def model_sweep(
     Examples:
       # Compare all four models with their default param grids
       flare model sweep -i logs/hdfs_sample.log --labels logs/sample_labels.csv \\
-          --models isolation_forest,lof,ocsvm,elliptic
+          --models isolation_forest,lof,ocsvm,elliptic,sgd_ocsvm
 
       # IF-only hyperparameter sweep with custom grid
       flare model sweep -i logs/hdfs_sample.log --labels logs/sample_labels.csv \\
@@ -759,7 +767,7 @@ def model_sweep(
     )
 
     try:
-        result = sweep.run(input_path, labels, promote_best=promote)
+        result = sweep.run(input_path, labels, promote_best=promote, use_cache=not no_cache)
     except (RuntimeError, ValueError) as e:
         console.print(f"[red]{e}[/]")
         return

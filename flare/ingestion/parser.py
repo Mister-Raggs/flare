@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pickle
 import re
 from pathlib import Path
 
@@ -100,14 +101,20 @@ class LogParser:
         depth = self._format.drain_depth if self._format else 4
         self._miner = _create_template_miner(sim_th, depth, persist_path)
 
-    def parse_file(self, filepath: str | Path) -> ParsedLogBatch:
+    def parse_file(
+        self, filepath: str | Path, use_cache: bool = True
+    ) -> ParsedLogBatch:
         """Parse an entire log file into structured events.
 
-        For auto mode, reads the first lines to detect the format before
-        parsing the full file.
+        On first parse, results are pickled to ``<filepath>.flare.cache``
+        so subsequent calls skip the expensive Drain3 templating step.
+        The cache is invalidated automatically when the log file is modified.
 
         Args:
             filepath: Path to the raw log file.
+            use_cache: If True (default), load from cache when available and
+                save after a fresh parse. Pass False to force a full re-parse
+                (e.g. after changing Drain3 config or format settings).
 
         Returns:
             ParsedLogBatch containing all parsed events and metadata.
@@ -118,6 +125,19 @@ class LogParser:
         filepath = Path(filepath)
         if not filepath.exists():
             raise FileNotFoundError(f"Log file not found: {filepath}")
+
+        cache_path = filepath.with_suffix(".flare.cache")
+
+        if use_cache and cache_path.exists():
+            if cache_path.stat().st_mtime >= filepath.stat().st_mtime:
+                # Resolve format from the first few lines so parser state is
+                # consistent with what a full parse would have produced.
+                if self.log_format == "auto" and self._format is None:
+                    with open(filepath, encoding="utf-8", errors="replace") as fh:
+                        head = [fh.readline().strip() for _ in range(20)]
+                    self._resolve_format([ln for ln in head if ln])
+                with open(cache_path, "rb") as fh:
+                    return pickle.load(fh)
 
         lines = self._read_lines(filepath)
         if not lines:
@@ -137,12 +157,18 @@ class LogParser:
             else:
                 events.append(event)
 
-        return ParsedLogBatch(
+        batch = ParsedLogBatch(
             events=events,
             total_lines=len(lines),
             parse_errors=parse_errors,
             template_count=len(self._miner.drain.clusters),
         )
+
+        if use_cache:
+            with open(cache_path, "wb") as fh:
+                pickle.dump(batch, fh)
+
+        return batch
 
     def parse_line(self, raw_line: str, line_id: int = 0) -> LogEvent | None:
         """Parse a single log line into a structured LogEvent.
