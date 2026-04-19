@@ -137,7 +137,7 @@ class LogParser:
                         head = [fh.readline().strip() for _ in range(20)]
                     self._resolve_format([ln for ln in head if ln])
                 with open(cache_path, "rb") as fh:
-                    return pickle.load(fh)
+                    return pickle.load(fh)  # type: ignore[no-any-return]
 
         lines = self._read_lines(filepath)
         if not lines:
