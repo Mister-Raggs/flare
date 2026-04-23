@@ -827,5 +827,154 @@ def model_sweep(
     )
 
 
+# ── drain3 command group ───────────────────────────────────────────────────────
+
+@cli.group()
+def drain3() -> None:
+    """Validate and tune Drain3 template mining parameters."""
+
+
+@drain3.command("validate")
+@click.option("-i", "--input", "input_path", required=True, help="Path to raw log file.")
+@click.option(
+    "--gt-templates",
+    "gt_templates_path",
+    default=None,
+    help="Path to LogHub templates CSV for supervised ARI (optional).",
+)
+@click.option(
+    "--sim-th",
+    "sim_th_str",
+    default="0.3,0.4,0.5,0.6",
+    show_default=True,
+    help="Comma-separated similarity threshold values to sweep.",
+)
+@click.option(
+    "--depth",
+    "depth_str",
+    default="3,4,5",
+    show_default=True,
+    help="Comma-separated parse-tree depth values to sweep.",
+)
+@click.option(
+    "--sample",
+    "sample_lines",
+    default=50_000,
+    show_default=True,
+    help="Number of log lines to use per combo (keeps sweep fast).",
+)
+def drain3_validate(
+    input_path: str,
+    gt_templates_path: str | None,
+    sim_th_str: str,
+    depth_str: str,
+    sample_lines: int,
+) -> None:
+    """Sweep Drain3 (sim_th, depth) settings and score template quality.
+
+    \b
+    Unsupervised metrics (always):
+      n_templates      — distinct templates discovered
+      coverage_%       — lines matched to a template
+      wildcard_density — avg wildcards per token (high = over-merging)
+      entropy          — Shannon entropy of template frequency distribution
+      convergence      — how early templates stabilised (high = generalises)
+      composite        — weighted score combining all of the above
+
+    \b
+    Supervised metric (requires --gt-templates):
+      ARI              — Adjusted Rand Index vs ground-truth template labels
+
+    \b
+    Example:
+      flare drain3 validate -i HDFS_v1/HDFS.log \\
+          --gt-templates HDFS_v1/preprocessed/HDFS.log_templates.csv
+    """
+    from flare.ingestion.drain_validator import DrainValidator
+
+    sim_th_values = [float(x.strip()) for x in sim_th_str.split(",")]
+    depth_values = [int(x.strip()) for x in depth_str.split(",")]
+
+    n_combos = len(sim_th_values) * len(depth_values)
+    supervised = gt_templates_path is not None
+
+    console.print(
+        Panel(
+            f"[bold]log:[/]       {input_path}\n"
+            f"[bold]sample:[/]    {sample_lines:,} lines per combo\n"
+            f"[bold]sim_th:[/]    {sim_th_values}\n"
+            f"[bold]depth:[/]     {depth_values}\n"
+            f"[bold]combos:[/]    {n_combos}\n"
+            f"[bold]supervised:[/] {'yes — ' + str(gt_templates_path) if supervised else 'no'}",
+            title="flare drain3 validate",
+            expand=False,
+        )
+    )
+
+    validator = DrainValidator(
+        sim_th_values=sim_th_values,
+        depth_values=depth_values,
+        sample_lines=sample_lines,
+    )
+
+    with console.status("[cyan]Running sweep…[/]"):
+        result = validator.validate(input_path, gt_templates_path)
+
+    # ── results table ──────────────────────────────────────────────────────────
+    tbl = Table(title=f"Drain3 Sweep Results  ({result.sample_lines:,} lines sampled)")
+    tbl.add_column("sim_th", style="cyan")
+    tbl.add_column("depth", style="cyan")
+    tbl.add_column("templates", justify="right")
+    tbl.add_column("coverage%", justify="right")
+    tbl.add_column("wc_density", justify="right")
+    tbl.add_column("entropy", justify="right")
+    tbl.add_column("convergence", justify="right")
+    tbl.add_column("composite", justify="right", style="bold")
+    if supervised:
+        tbl.add_column("ARI", justify="right", style="green bold")
+
+    best_composite = result.best
+    best_ari = result.best_ari
+
+    for m in result.results:
+        is_best_c = m is best_composite
+        is_best_a = supervised and m is best_ari
+        marker = " ★" if is_best_c or is_best_a else ""
+        row: list[Any] = [
+            str(m.sim_th),
+            str(m.depth),
+            str(m.n_templates),
+            f"{m.coverage_rate * 100:.1f}%",
+            f"{m.wildcard_density:.3f}",
+            f"{m.template_entropy:.3f}",
+            f"{m.convergence:.3f}",
+            f"{m.composite:.4f}{marker}",
+        ]
+        if supervised:
+            ari_str = f"{m.ari:.4f}" if m.ari is not None else "n/a"
+            if is_best_a:
+                ari_str += " ★"
+            row.append(ari_str)
+        tbl.add_row(*row)
+
+    console.print(tbl)
+
+    # ── recommendation panel ───────────────────────────────────────────────────
+    b = best_ari if supervised and best_ari else best_composite
+    score_label = f"ARI={b.ari:.4f}" if b.ari is not None else f"composite={b.composite:.4f}"
+    console.print(
+        Panel(
+            f"[bold]Best settings:[/]  sim_th={b.sim_th}  depth={b.depth}\n"
+            f"[bold]Score:[/]          {score_label}\n"
+            f"[bold]Templates:[/]      {b.n_templates}\n"
+            f"[bold]Coverage:[/]       {b.coverage_rate * 100:.1f}%\n\n"
+            f"[dim]Use these in LogParser:  "
+            f"LogParser(log_format='hdfs')  # edit drain_sim_th / drain_depth in formats.py[/]",
+            title="Recommendation",
+            expand=False,
+        )
+    )
+
+
 if __name__ == "__main__":
     cli()
