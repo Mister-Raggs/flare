@@ -27,6 +27,7 @@ Example — IF-only hyperparameter sweep (original behaviour):
 from __future__ import annotations
 
 import itertools
+import json
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -453,6 +454,24 @@ class HyperparamSweep:
                         mlflow.sklearn.log_model(
                             estimator, "model", signature=signature
                         )
+
+                        # ── vocab artifact (required for ModelServer) ─────
+                        import os
+                        import tempfile as _tmpmod
+                        with _tmpmod.NamedTemporaryFile(
+                            mode="w", suffix=".json", delete=False
+                        ) as vf:
+                            json.dump(
+                                {
+                                    "template_vocab": detector._template_vocab,
+                                    "n_extra": detector._n_extra(),
+                                    "feature_set": self.feature_set,
+                                },
+                                vf,
+                            )
+                            _vocab_path = vf.name
+                        mlflow.log_artifact(_vocab_path, artifact_path="")
+                        os.unlink(_vocab_path)
 
                         # ── confusion matrix ──────────────────────────────
                         self._log_confusion_matrix(

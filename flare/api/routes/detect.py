@@ -6,9 +6,10 @@ import logging
 import tempfile
 import time
 from pathlib import Path
+from typing import Any
 
 import numpy as np
-from fastapi import APIRouter, UploadFile
+from fastapi import APIRouter, Request, UploadFile
 
 from flare.api.models import DetectRequest, DetectResponse, IncidentPayload
 
@@ -17,9 +18,16 @@ router = APIRouter()
 
 
 def _run_detection(
-    log_text: str, contamination: float, use_registry: bool = False
+    log_text: str,
+    contamination: float,
+    use_registry: bool = False,
+    model_server: Any = None,
 ) -> DetectResponse:
     """Run the full ingestion → detection → clustering pipeline.
+
+    When ``model_server`` is provided (pre-loaded at API startup), detection
+    is pure inference — no fit() on the request path.  Falls back to training
+    a fresh model when no server is available.
 
     This is synchronous because Drain3 and scikit-learn are CPU-bound.
     FastAPI runs it in a threadpool automatically for async endpoints.
@@ -30,16 +38,17 @@ def _run_detection(
 
     start = time.monotonic()
 
-    # Write log text to a temp file for the parser
+    # Write log text to a temp file for the parser (no cache for temp files)
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".log", delete=False, encoding="utf-8"
     ) as f:
         f.write(log_text)
         tmp_path = f.name
 
+    mlflow_run_id = None
     try:
         parser = LogParser()
-        batch = parser.parse_file(tmp_path)
+        batch = parser.parse_file(tmp_path, use_cache=False)
 
         if not batch.events:
             return DetectResponse(
@@ -51,10 +60,18 @@ def _run_detection(
                 processing_time_ms=0,
             )
 
-        detector = AnomalyDetector(contamination=contamination, use_registry=use_registry)
-        results = detector.detect(batch.events)
-        anomalies = [r for r in results if r.is_anomaly]
+        if model_server is not None:
+            # ── inference-only path (zero training) ───────────────────────
+            results = model_server.infer(batch.events)
+        else:
+            # ── fallback: train a fresh model on the incoming data ─────────
+            detector = AnomalyDetector(
+                contamination=contamination, use_registry=use_registry
+            )
+            results = detector.detect(batch.events)
+            mlflow_run_id = getattr(detector, "mlflow_run_id", None)
 
+        anomalies = [r for r in results if r.is_anomaly]
         clusterer = IncidentClusterer()
         incidents = clusterer.cluster(results, events=batch.events)
     finally:
@@ -94,7 +111,7 @@ def _run_detection(
         total_events=len(batch.events),
         templates_discovered=batch.template_count,
         processing_time_ms=elapsed_ms,
-        mlflow_run_id=getattr(detector, "mlflow_run_id", None),
+        mlflow_run_id=mlflow_run_id,
     )
 
 
@@ -107,14 +124,17 @@ def _run_detection(
         "and cluster anomalous blocks into incidents."
     ),
 )
-async def detect(request: DetectRequest) -> DetectResponse:
+async def detect(request: DetectRequest, req: Request) -> DetectResponse:
     """Run anomaly detection on raw log text."""
     logger.info(
         "Detection request: %d chars, contamination=%.3f",
         len(request.log_text),
         request.contamination,
     )
-    return _run_detection(request.log_text, request.contamination, request.use_registry)
+    server = getattr(req.app.state, "model_server", None)
+    return _run_detection(
+        request.log_text, request.contamination, request.use_registry, server
+    )
 
 
 @router.post(
@@ -125,6 +145,7 @@ async def detect(request: DetectRequest) -> DetectResponse:
 )
 async def detect_upload(
     file: UploadFile,
+    req: Request,
     contamination: float = 0.03,
     use_registry: bool = False,
 ) -> DetectResponse:
@@ -137,4 +158,5 @@ async def detect_upload(
         len(content),
         contamination,
     )
-    return _run_detection(log_text, contamination, use_registry)
+    server = getattr(req.app.state, "model_server", None)
+    return _run_detection(log_text, contamination, use_registry, server)

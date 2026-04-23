@@ -36,6 +36,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         settings.port,
         settings.port,
     )
+
+    # Pre-load Production model for zero-training inference on the request path
+    app.state.model_server = None
+    try:
+        from flare.detection.server import ModelServer
+        app.state.model_server = ModelServer.from_registry()
+        logger.info(
+            "ModelServer ready: %s  vocab=%d  feature_set=%s",
+            app.state.model_server.stage,
+            app.state.model_server.vocab_size,
+            app.state.model_server.feature_set,
+        )
+    except Exception as exc:
+        logger.info("No Production model in registry (%s) — will train per request", exc)
+
     yield
     logger.info("Flare API shutting down")
 
