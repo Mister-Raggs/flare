@@ -190,12 +190,16 @@ class HyperparamSweep:
         n_estimators_values: list[int] | None = None,
         experiment_name: str = EXPERIMENT_NAME,
         model_registry_name: str = MODEL_REGISTRY_NAME,
+        feature_set: str = "full",
     ) -> None:
         self.model_names = model_names or ["isolation_forest"]
         for name in self.model_names:
             if name not in MODELS:
                 valid = list(MODELS.keys())
                 raise ValueError(f"Unknown model '{name}'. Valid options: {valid}")
+        if feature_set not in ("full", "freq_only"):
+            raise ValueError(f"feature_set must be 'full' or 'freq_only', got {feature_set!r}")
+        self.feature_set = feature_set
         self.contamination_values = contamination_values
         self.n_estimators_values = n_estimators_values
         self.experiment_name = experiment_name
@@ -344,7 +348,8 @@ class HyperparamSweep:
                         # ── train ─────────────────────────────────────────
                         # Reuse IF vocab/features from AnomalyDetector;
                         # for other models build features independently.
-                        detector = AnomalyDetector()
+                        mlflow.log_param("feature_set", self.feature_set)
+                        detector = AnomalyDetector(feature_set=self.feature_set)
                         detection_results = detector.detect(batch.events, track=False)
                         assert detector._last_feature_matrix is not None
                         feature_matrix = detector._last_feature_matrix

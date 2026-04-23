@@ -64,6 +64,7 @@ class AnomalyDetector:
         n_estimators: int = 200,
         random_state: int = 42,
         use_registry: bool = False,
+        feature_set: str = "full",
     ) -> None:
         """Initialize the detector.
 
@@ -74,11 +75,19 @@ class AnomalyDetector:
             use_registry: If True, attempt to load the Production model from
                 the MLflow Model Registry instead of training a new one.
                 Falls back to training if no Production model exists.
+            feature_set: ``"full"`` includes all 8 sequence/level columns on
+                top of template frequencies.  ``"freq_only"`` uses template
+                frequency counts only — the pre-Phase-4 baseline.
         """
+        if feature_set not in ("full", "freq_only"):
+            raise ValueError(
+                f"feature_set must be 'full' or 'freq_only', got {feature_set!r}"
+            )
         self.contamination = contamination
         self.n_estimators = n_estimators
         self.random_state = random_state
         self.use_registry = use_registry
+        self.feature_set = feature_set
         self._model: IsolationForest | None = None
         self._template_vocab: list[int] = []
         self._last_feature_matrix: np.ndarray | None = None
@@ -88,6 +97,7 @@ class AnomalyDetector:
     # Layout: [template freqs × V] [event_count] [unique_templates] [span]
     #         [entropy] [repeat_ratio] [unique_bigrams] [error_count] [warn_count]
     _N_EXTRA: int = 8
+    _N_EXTRA_FREQ_ONLY: int = 0
 
     def detect(
         self,
@@ -320,13 +330,19 @@ class AnomalyDetector:
         template_ids = {e.template_id for e in events if e.template_id >= 0}
         self._template_vocab = sorted(template_ids)
 
+    def _n_extra(self) -> int:
+        """Extra columns appended after template frequencies for this feature_set."""
+        return self._N_EXTRA_FREQ_ONLY if self.feature_set == "freq_only" else self._N_EXTRA
+
     def _build_features(
         self, blocks: dict[str, list[LogEvent]], block_ids: list[str]
     ) -> np.ndarray:
-        """Build feature matrix with template frequencies and sequence features.
+        """Build feature matrix.
 
-        Column layout (V = vocab size):
-          [0 … V-1]  template frequency counts
+        ``freq_only`` layout (V = vocab size):
+          [0 … V-1]  template frequency counts only
+
+        ``full`` layout adds 8 columns:
           [V+0]      total event count
           [V+1]      unique template count
           [V+2]      event span  (max line_id - min line_id)
@@ -339,17 +355,21 @@ class AnomalyDetector:
         vocab_index = {tid: idx for idx, tid in enumerate(self._template_vocab)}
         vocab_size = len(self._template_vocab)
         n_blocks = len(block_ids)
-        matrix = np.zeros((n_blocks, vocab_size + self._N_EXTRA), dtype=np.float64)
+        n_extra = self._n_extra()
+        matrix = np.zeros((n_blocks, vocab_size + n_extra), dtype=np.float64)
 
         for i, bid in enumerate(block_ids):
             events = blocks[bid]
             template_seq = [e.template_id for e in events if e.template_id >= 0]
             counts = Counter(template_seq)
 
-            # ── template frequency features ───────────────────────────────────
+            # ── template frequency features (always) ──────────────────────────
             for tid, count in counts.items():
                 if tid in vocab_index:
                     matrix[i, vocab_index[tid]] = count
+
+            if self.feature_set == "freq_only":
+                continue
 
             # ── aggregate counts ──────────────────────────────────────────────
             matrix[i, vocab_size] = len(events)

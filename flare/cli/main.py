@@ -683,6 +683,17 @@ def model_compare(name: str, n: int) -> None:
     default=False,
     help="Force full re-parse even if a .flare.cache file exists.",
 )
+@click.option(
+    "--feature-set",
+    "feature_set",
+    type=click.Choice(["full", "freq_only"]),
+    default="full",
+    show_default=True,
+    help=(
+        "'full' uses template freqs + 8 sequence/level features. "
+        "'freq_only' uses template frequencies only (pre-Phase-4 baseline)."
+    ),
+)
 def model_sweep(
     input_path: str,
     labels: str,
@@ -691,6 +702,7 @@ def model_sweep(
     n_estimators_str: str | None,
     promote: bool,
     no_cache: bool,
+    feature_set: str,
 ) -> None:
     """Compare anomaly detection models via a grid search, logged as nested MLflow runs.
 
@@ -753,6 +765,7 @@ def model_sweep(
             f"[bold]models:[/]       {model_names}\n"
             f"[bold]combinations:[/] {n_combos}\n"
             f"[bold]labels:[/]       {labels}\n"
+            f"[bold]feature_set:[/]  {feature_set}\n"
             + ("[green]auto-promote best → Staging[/]"
                if promote else "[dim]--promote to auto-stage best[/]"),
             title="flare model sweep",
@@ -764,6 +777,7 @@ def model_sweep(
         model_names=model_names,
         contamination_values=contamination_values,
         n_estimators_values=n_estimators_values,
+        feature_set=feature_set,
     )
 
     try:
